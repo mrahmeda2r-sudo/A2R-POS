@@ -1,0 +1,344 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+env:
+  APP_VERSION: "1.3.0"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sanity check main.dart
+        run: |
+          if ! head -1 main.dart | grep -q "import 'dart:convert'"; then
+            echo "ERROR: main.dart does not contain the app code"
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create Flutter project and add our code
+        run: |
+          flutter create --org com.pos --project-name pos_app --platforms android app
+          cp main.dart app/lib/main.dart
+          cd app
+          flutter pub add google_mlkit_text_recognition permission_handler pdf "archive:^3.6.1" share_plus image printing shared_preferences file_picker excel
+          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>\n    <queries><intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="vnd.android.document/directory"/></intent><intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="resource/folder"/></intent></queries>\n    <application|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<application android:largeHeap=\"true\"|' android/app/src/main/AndroidManifest.xml
+          sed -i -E 's/^( *)compileSdk *=.*/\1compileSdk = 37/' android/app/build.gradle.kts
+          printf '%s\n' '-dontwarn com.google.mlkit.vision.text.**' '-keep class com.google.mlkit.** { *; }' '-keep class com.google.android.gms.internal.mlkit_vision_text_common.** { *; }' '-keep class com.google.android.gms.internal.mlkit_vision_text_bundled_common.** { *; }' > android/app/proguard-rules.pro
+          sed -i 's|signingConfig = signingConfigs.getByName("debug")|&\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")|' android/app/build.gradle.kts
+          rm -rf test
+          
+          if [ -f ../template.xlsx ]; then
+            mkdir -p assets
+            cp ../template.xlsx assets/template.xlsx
+            sed -i 's|^  uses-material-design: true|  uses-material-design: true\n  assets:\n    - assets/template.xlsx|' pubspec.yaml
+          fi
+
+          mkdir -p android/app/src/main/res/xml
+          cat > android/app/src/main/res/xml/pos_file_paths.xml <<'EOX'
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <external-path name="all_ext" path="." />
+          </paths>
+          EOX
+          sed -i 's|</application>|    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.pos_fileprovider" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/pos_file_paths"/></provider>\n    <service android:name=".KeepAliveService" android:exported="false" android:foregroundServiceType="dataSync"/>\n    </application>|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|android:label="[^"]*"|android:label="A2R POS"|' android/app/src/main/AndroidManifest.xml
+          MA=$(find android/app/src/main -name MainActivity.kt | head -1)
+          PKG=$(grep -m1 '^package ' "$MA" | sed 's/package //')
+          cat > "$MA" <<EOK
+          package $PKG
+
+          import android.app.NotificationManager
+          import android.content.Context
+          import android.content.Intent
+          import android.os.Build
+          import android.net.Uri
+          import android.provider.DocumentsContract
+          import androidx.core.content.FileProvider
+          import io.flutter.embedding.android.FlutterActivity
+          import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodChannel
+          import java.io.File
+
+          class MainActivity : FlutterActivity() {
+              override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+                  super.configureFlutterEngine(flutterEngine)
+                  android.os.StrictMode.setVmPolicy(android.os.StrictMode.VmPolicy.Builder().build())
+                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "pos/native")
+                      .setMethodCallHandler { call, result ->
+                          when (call.method) {
+                              "openFolder" -> result.success(openFolder(call.argument<String>("path") ?: ""))
+                              "startKeepAlive" -> {
+                                  val i = Intent(this, KeepAliveService::class.java)
+                                  i.putExtra("title", call.argument<String>("title") ?: "A2R POS")
+                                  i.putExtra("text", call.argument<String>("text") ?: "")
+                                  try {
+                                      if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+                                      result.success(true)
+                                  } catch (e: Exception) { result.success(false) }
+                              }
+                              "stopKeepAlive" -> {
+                                  try { stopService(Intent(this, KeepAliveService::class.java)) } catch (e: Exception) {}
+                                  result.success(true)
+                              }
+                              "notify" -> {
+                                  try {
+                                      val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                                      nm.notify(8, NotifHelper.build(this, "pos_done", "اكتمال المعالجة", call.argument<String>("title") ?: "A2R POS", call.argument<String>("text") ?: "", false))
+                                      result.success(true)
+                                  } catch (e: Exception) { result.success(false) }
+                              }
+                              "folderHandlers" -> result.success(folderHandlers(call.argument<String>("path") ?: ""))
+                              "openFolderWith" -> result.success(openFolderWith(call.argument<String>("path") ?: "", call.argument<String>("pkg") ?: "", call.argument<String>("cls") ?: "", call.argument<String>("kind") ?: ""))
+                              "openFile" -> result.success(openFile(call.argument<String>("path") ?: "", call.argument<String>("mime") ?: "*/*"))
+                              "shareToWhatsApp" -> result.success(shareToWhatsApp(call.argument<List<String>>("paths") ?: emptyList(), call.argument<String>("text") ?: ""))
+                              else -> result.notImplemented()
+                          }
+                      }
+              }
+
+              private fun openFolder(path: String): Boolean {
+                  val prefix = "/storage/emulated/0/"
+                  if (!path.startsWith(prefix)) return false
+                  val rel = path.substring(prefix.length)
+                  val docUri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + rel)
+                  return try {
+                      val t = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                      t.putExtra(DocumentsContract.EXTRA_INITIAL_URI, docUri)
+                      t.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                      startActivity(t)
+                      true
+                  } catch (e: Exception) { false }
+              }
+
+              private fun folderIntents(path: String): List<Pair<String, Intent>> {
+                  val out = ArrayList<Pair<String, Intent>>()
+                  val prefix = "/storage/emulated/0/"
+                  if (!path.startsWith(prefix)) return out
+                  val rel = path.substring(prefix.length)
+                  val docUri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + rel)
+                  out.add(Pair("doc", Intent(Intent.ACTION_VIEW).setDataAndType(docUri, "vnd.android.document/directory")))
+                  try {
+                      val fpUri = FileProvider.getUriForFile(this, packageName + ".pos_fileprovider", File(path))
+                      for (t in listOf("resource/folder", "application/x-directory", "inode/directory")) {
+                          out.add(Pair("fp:" + t, Intent(Intent.ACTION_VIEW).setDataAndType(fpUri, t)))
+                      }
+                  } catch (e: Exception) {}
+                  return out
+              }
+
+              private fun folderHandlers(path: String): List<HashMap<String, String>> {
+                  val res = ArrayList<HashMap<String, String>>()
+                  val seen = HashSet<String>()
+                  for (p in folderIntents(path)) {
+                      val base = p.second
+                      base.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                      for (ri in packageManager.queryIntentActivities(base, android.content.pm.PackageManager.MATCH_ALL)) {
+                          val pkg = ri.activityInfo.packageName
+                          if (!seen.add(pkg + "|" + p.first)) continue
+                          val m = HashMap<String, String>()
+                          m["label"] = ri.loadLabel(packageManager).toString()
+                          m["pkg"] = pkg
+                          m["cls"] = ri.activityInfo.name
+                          m["kind"] = p.first
+                          try {
+                              val icon = ri.loadIcon(packageManager)
+                              val bitmap = (icon as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                              if (bitmap != null) {
+                                  val stream = java.io.ByteArrayOutputStream()
+                                  bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
+                                  m["icon"] = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+                              }
+                          } catch (e: Exception) {}
+                          res.add(m)
+                      }
+                  }
+                  return res
+              }
+
+              private fun openFolderWith(path: String, pkg: String, cls: String, kind: String): Boolean {
+                  val prefix = "/storage/emulated/0/"
+                  if (!path.startsWith(prefix)) return false
+                  val rel = path.substring(prefix.length)
+                  val docUri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + rel)
+                  if (kind == "tree" || pkg.isEmpty()) {
+                      return try {
+                          val t = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                          t.putExtra(DocumentsContract.EXTRA_INITIAL_URI, docUri)
+                          t.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                          startActivity(t)
+                          true
+                      } catch (e: Exception) { false }
+                  }
+                  val i = Intent(Intent.ACTION_VIEW)
+                  i.setClassName(pkg, cls)
+                  i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                  if (kind == "doc") i.setDataAndType(docUri, "vnd.android.document/directory")
+                  else try { i.setDataAndType(FileProvider.getUriForFile(this, packageName + ".pos_fileprovider", File(path)), kind.replace("fp:", "")) } catch(e: Exception){}
+                  return try { startActivity(i); true } catch (e: Exception) { false }
+              }
+
+              private fun openFile(path: String, mime: String): Boolean {
+                  return try {
+                      val uri = FileProvider.getUriForFile(this, packageName + ".pos_fileprovider", File(path))
+                      val i = Intent(Intent.ACTION_VIEW)
+                      i.setDataAndType(uri, mime)
+                      i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                      startActivity(Intent.createChooser(i, "افتح بواسطة"))
+                      true
+                  } catch (e: Exception) { false }
+              }
+
+              private fun shareToWhatsApp(paths: List<String>, text: String): String {
+                  val uris = ArrayList<Uri>()
+                  for (p in paths) {
+                      uris.add(FileProvider.getUriForFile(this, packageName + ".pos_fileprovider", File(p)))
+                  }
+                  if (uris.isEmpty()) return "no_files"
+                  for (pkg in listOf("com.whatsapp", "com.whatsapp.w4b")) {
+                      val intent = Intent(Intent.ACTION_SEND_MULTIPLE)
+                      intent.type = "*/*"
+                      intent.setPackage(pkg)
+                      intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                      intent.putExtra(Intent.EXTRA_TEXT, text)
+                      intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                      try { startActivity(intent); return "ok" } catch (e: Exception) {}
+                  }
+                  return "no_whatsapp"
+              }
+          }
+          EOK
+          cat > "$(dirname "$MA")/Notif.kt" <<EOK2
+          package $PKG
+
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.PendingIntent
+          import android.app.Service
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.ServiceInfo
+          import android.os.Build
+          import android.os.IBinder
+
+          object NotifHelper {
+              fun build(ctx: Context, channelId: String, channelName: String, title: String, text: String, ongoing: Boolean): Notification {
+                  val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      val imp = if (ongoing) NotificationManager.IMPORTANCE_LOW else NotificationManager.IMPORTANCE_HIGH
+                      nm.createNotificationChannel(NotificationChannel(channelId, channelName, imp))
+                  }
+                  val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName) ?: Intent()
+                  val pi = PendingIntent.getActivity(ctx, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                  val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(ctx, channelId) else Notification.Builder(ctx)
+                  b.setSmallIcon(ctx.applicationInfo.icon)
+                  b.setContentTitle(title)
+                  b.setContentText(text)
+                  b.setContentIntent(pi)
+                  b.setOngoing(ongoing)
+                  b.setAutoCancel(!ongoing)
+                  return b.build()
+              }
+          }
+
+          class KeepAliveService : Service() {
+              override fun onBind(intent: Intent?): IBinder? = null
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  val title = intent?.getStringExtra("title") ?: "A2R POS"
+                  val text = intent?.getStringExtra("text") ?: ""
+                  val n = NotifHelper.build(this, "pos_progress", "جاري المعالجة", title, text, true)
+                  if (Build.VERSION.SDK_INT >= 29) startForeground(7, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) else startForeground(7, n)
+                  return START_NOT_STICKY
+              }
+          }
+          EOK2
+          printf '\ndependencies {\n    implementation("androidx.core:core:1.13.1")\n}\n' >> android/app/build.gradle.kts
+          sed -i "s/^version: .*/version: ${APP_VERSION}+${GITHUB_RUN_NUMBER}/" pubspec.yaml
+          
+          if [ -f ../icon.png ]; then
+            mkdir -p assets
+            cp ../icon.png assets/icon.png
+            flutter pub add --dev flutter_launcher_icons
+            printf '\nflutter_launcher_icons:\n  android: true\n  ios: false\n  image_path: "assets/icon.png"\n' >> pubspec.yaml
+            dart run flutter_launcher_icons
+          fi
+
+      - name: Gradle - also resolve plugins from Maven Central
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/repos.gradle <<'EOG'
+          gradle.beforeSettings { settings ->
+            settings.pluginManagement {
+              repositories { mavenCentral(); google(); gradlePluginPortal() }
+            }
+          }
+          gradle.allprojects { project ->
+            project.buildscript.repositories { mavenCentral(); google() }
+          }
+          EOG
+
+      - name: Build APK
+        run: |
+          cd app
+          VER="${APP_VERSION}+${GITHUB_RUN_NUMBER}"
+          
+          ok=0
+          for i in 1 2; do
+            if flutter build apk --release --no-shrink --target-platform android-arm64 --dart-define=APP_VERSION=$VER; then ok=1; break; fi
+            sleep 30
+          done
+          
+          if [ "$ok" != 1 ]; then
+            flutter build apk --debug --dart-define=APP_VERSION=$VER && ok=2
+          fi
+          test "$ok" != 0
+
+      - name: Prepare APK file
+        run: |
+          OUT=app/build/app/outputs/flutter-apk
+          if [ -f "$OUT/app-release.apk" ]; then cp "$OUT/app-release.apk" A2R-POS.apk; else cp "$OUT/app-debug.apk" A2R-POS.apk; fi
+          
+      - name: Publish APK to branch apk
+        id: br
+        continue-on-error: true
+        run: |
+          mkdir -p /tmp/apkpub
+          cp A2R-POS.apk /tmp/apkpub/
+          echo "version ${APP_VERSION} build ${GITHUB_RUN_NUMBER}" > /tmp/apkpub/VERSION.txt
+          cd /tmp/apkpub
+          git init -q -b apk
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add .
+          git commit -q -m "APK build ${GITHUB_RUN_NUMBER}"
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git push -f origin apk
+
+      - name: Publish APK to Release
+        id: rel
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" A2R-POS.apk --title "A2R POS ${APP_VERSION} (${GITHUB_RUN_NUMBER})" --notes "build ${GITHUB_RUN_NUMBER}" --latest --target ${{ github.sha }}
