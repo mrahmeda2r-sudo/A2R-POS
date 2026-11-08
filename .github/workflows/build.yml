@@ -17,6 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fix Arabic encoding in main.dart (if broken)
+        run: python3 fix_encoding.py main.dart
+
       - name: Sanity check main.dart
         run: |
           if ! head -1 main.dart | grep -q "import 'dart:convert'"; then
