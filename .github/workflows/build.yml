@@ -46,11 +46,6 @@ jobs:
           sed -i 's|signingConfig = signingConfigs.getByName("debug")|&\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")|' android/app/build.gradle.kts
           rm -rf test
           
-          if [ -f ../template.xlsx ]; then
-            mkdir -p assets
-            cp ../template.xlsx assets/template.xlsx
-            sed -i 's|^  uses-material-design: true|  uses-material-design: true\n  assets:\n    - assets/template.xlsx|' pubspec.yaml
-          fi
 
           mkdir -p android/app/src/main/res/xml
           cat > android/app/src/main/res/xml/pos_file_paths.xml <<'EOX'
@@ -60,7 +55,7 @@ jobs:
           </paths>
           EOX
           sed -i 's|</application>|    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.pos_fileprovider" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/pos_file_paths"/></provider>\n    <service android:name=".KeepAliveService" android:exported="false" android:foregroundServiceType="dataSync"/>\n    </application>|' android/app/src/main/AndroidManifest.xml
-          sed -i 's|android:label="[^"]*"|android:label="A2R POS 2"|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|android:label="[^"]*"|android:label="A2R POS Public"|' android/app/src/main/AndroidManifest.xml
           MA=$(find android/app/src/main -name MainActivity.kt | head -1)
           PKG=$(grep -m1 '^package ' "$MA" | sed 's/package //')
           cat > "$MA" <<EOK
@@ -274,13 +269,6 @@ jobs:
           printf '\ndependencies {\n    implementation("androidx.core:core:1.13.1")\n}\n' >> android/app/build.gradle.kts
           sed -i "s/^version: .*/version: ${APP_VERSION}+${GITHUB_RUN_NUMBER}/" pubspec.yaml
           
-          if [ -f ../icon.png ]; then
-            mkdir -p assets
-            cp ../icon.png assets/icon.png
-            flutter pub add --dev flutter_launcher_icons
-            printf '\nflutter_launcher_icons:\n  android: true\n  ios: false\n  image_path: "assets/icon.png"\n' >> pubspec.yaml
-            dart run flutter_launcher_icons
-          fi
 
       - name: Gradle - also resolve plugins from Maven Central
         run: |
@@ -315,14 +303,14 @@ jobs:
       - name: Prepare APK file
         run: |
           OUT=app/build/app/outputs/flutter-apk
-          if [ -f "$OUT/app-release.apk" ]; then cp "$OUT/app-release.apk" A2R-POS.apk; else cp "$OUT/app-debug.apk" A2R-POS.apk; fi
+          if [ -f "$OUT/app-release.apk" ]; then cp "$OUT/app-release.apk" A2R-POS-Public.apk; else cp "$OUT/app-debug.apk" A2R-POS-Public.apk; fi
           
       - name: Publish APK to branch apk
         id: br
         continue-on-error: true
         run: |
           mkdir -p /tmp/apkpub
-          cp A2R-POS.apk /tmp/apkpub/
+          cp A2R-POS-Public.apk /tmp/apkpub/
           echo "version ${APP_VERSION} build ${GITHUB_RUN_NUMBER}" > /tmp/apkpub/VERSION.txt
           cd /tmp/apkpub
           git init -q -b apk
@@ -341,4 +329,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           TAG="build-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" A2R-POS.apk --title "A2R POS ${APP_VERSION} (${GITHUB_RUN_NUMBER})" --notes "build ${GITHUB_RUN_NUMBER}" --latest --target ${{ github.sha }}
+          gh release create "$TAG" A2R-POS-Public.apk --title "A2R POS Public ${APP_VERSION} (${GITHUB_RUN_NUMBER})" --notes "build ${GITHUB_RUN_NUMBER}" --latest --target ${{ github.sha }}
