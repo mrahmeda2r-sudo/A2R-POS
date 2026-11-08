@@ -1807,6 +1807,20 @@ String? extractUnitName(List<String> texts) {
   final skip = RegExp(
       r'NATIONAL|BANK|\bNBE\b|EGYPT|RECEIPT|CUSTOMER|COPY|MERCHANT|TERMINAL|BATCH|DATE|TIME|SALE|TOTAL|AMOUNT|VISA|MASTER|MEEZ|THANK|SUCCESS|CLOSED|CARD|APPROVAL|\bRRN\b|TRACE|VERSION|GRAND|REPORT|SETTLEMENT',
       caseSensitive: false);
+  // اسم الوحدة بيبقى تحت سطر "NATIONAL BANK OF EGYPT" على طول (قبل سطر العنوان)
+  final bankLine = RegExp(r'BANK\s*OF\s*EGYPT|NATIONAL\s*BANK|^\s*NBE\s*$', caseSensitive: false);
+  for (final t in texts) {
+    final ls = t.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    for (var i = 0; i < ls.length; i++) {
+      if (!bankLine.hasMatch(ls[i])) continue;
+      for (var j = i + 1; j < ls.length && j <= i + 3; j++) {
+        if (skip.hasMatch(ls[j])) continue;
+        final n = _cleanUnitName(ls[j]);
+        if (n != null) return n;
+      }
+      break;
+    }
+  }
   for (final t in texts) {
     var seen = 0;
     for (final raw in t.split('\n')) {
@@ -1836,6 +1850,41 @@ int _rowForUnitName(String name) {
   return mxRow + 1;
 }
 
+// الـ MERCHANT ID المكتوب على الإيصال (الأكتر تكراراً بين القراءات)
+String? extractMerchantId(List<String> texts) {
+  final found = <String>[];
+  final re = RegExp(r"MERCHANT\s*(?:ID|10|NO)\D{0,15}?(\d[\d\s/]{6,16}\d)", caseSensitive: false);
+  for (final t in texts) {
+    for (final m in re.allMatches(t)) {
+      final d = m.group(1)!.replaceAll('/', '7').replaceAll(RegExp(r'\D'), '');
+      if (d.length >= 8 && d.length <= 16) found.add(d);
+    }
+  }
+  return mostCommon(found)?.key;
+}
+
+// لو الـ MERCHANT ID ده متسجل قبل كده (أو قريب جداً منه بفرق رقم واحد من غلط القراءة) بنرجّع صف وحدته
+int? _rowForMerchant(String mid) {
+  final exact = merchantCodeMap[mid];
+  if (exact != null) return exact;
+  for (final e in merchantCodeMap.entries) {
+    final k = e.key;
+    if (k.length >= 6 && mid.contains(k)) return e.value;
+    if (k.length == mid.length && k.length >= 8 && _editDistance(k, mid) <= 1) return e.value;
+  }
+  return null;
+}
+
+// ماكينة معروفة بس الـ MERCHANT ID بتاعها لسه مش متسجل: بنسجّله علشان الماكينات الجاية بنفس الكود تدخل نفس الوحدة
+void learnMerchant(String tid, List<String> texts) {
+  final t = terminals[tid];
+  if (t == null) return;
+  final mid = extractMerchantId(texts);
+  if (mid == null || _rowForMerchant(mid) != null) return;
+  merchantCodeMap[mid] = t.excelRow;
+  saveSettingsToExcel();
+}
+
 // ماكينة جديدة مكتوبة على الإيصال (Terminal ID) ومش في القايمة: بنسجّلها هي ووحدتها وبنحفظها في ملف الإعدادات
 String? discoverTerminal(List<String> texts) {
   final counts = <String, int>{};
@@ -1847,12 +1896,16 @@ String? discoverTerminal(List<String> texts) {
   final tid = counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
   if (terminals.containsKey(tid)) return tid;
   final name = extractUnitName(texts) ?? 'Unit $tid';
-  final row = _rowForUnitName(name);
+  // ماكينات بترمنل مختلف لكن نفس الـ MERCHANT ID = نفس الوحدة: بتتحسب مع بعض في صف واحد
+  final mid = extractMerchantId(texts);
+  final byMerchant = mid == null ? null : _rowForMerchant(mid);
+  final row = byMerchant ?? _rowForUnitName(name);
   var order = 0;
   for (final t in terminals.values) {
     if (t.orderNum > order) order = t.orderNum;
   }
   terminals[tid] = TerminalInfo(order + 1, row, rowNames[row] ?? name);
+  if (mid != null && byMerchant == null) merchantCodeMap[mid] = row;
   rebuildTerminalIndexes();
   saveSettingsToExcel();
   return tid;
@@ -2048,6 +2101,7 @@ Analysis analyzeLines(List<OcrLine> all) {
 
   final date = findDateIn(allTexts);
   var tid = findTerminalIn(allTexts) ?? discoverTerminal(allTexts);
+  if (tid != null) learnMerchant(tid, allTexts);
   var how = 'terminal';
   int? row;
   String? name;
@@ -3373,48 +3427,142 @@ _StructPage _structCount(RecognizedText res) {
 bool sameDay(ReceiptItem a, ReceiptItem b) =>
     a.date == null || b.date == null || a.date == b.date;
 
-// بيجيب كل التطبيقات اللي تقدر تفتح فولدر (مدير ملفات) ويخلّيك تختار أي واحد، مش الافتراضي بس
+// ───────── اختيار تطبيق (مدير ملفات / معرض صور / ملفات PDF) مع إمكانية حفظ الافتراضي ─────────
+Map<String, String>? _loadDefaultHandler(String key) {
+  try {
+    final v = _readCfg()[key];
+    if (v is Map) return {for (final e in v.entries) e.key.toString(): e.value.toString()};
+  } catch (_) {}
+  return null;
+}
+
+void _saveDefaultHandler(String key, Map<String, String>? h) {
+  try {
+    final cfg = _readCfg();
+    if (h == null) {
+      cfg.remove(key);
+    } else {
+      cfg[key] = h;
+    }
+    _writeCfg(cfg);
+  } catch (_) {}
+}
+
+// بيمسح الاختيارات المحفوظة (مدير الملفات / المعرض / ملفات PDF) علشان تختار من جديد
+void resetDefaultHandlers(BuildContext context) {
+  for (final k in ['defFolder', 'defImage', 'defPdf']) {
+    _saveDefaultHandler(k, null);
+  }
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: w.Text('اتمسحت التطبيقات الافتراضية. هتختار من جديد المرة الجاية.')),
+  );
+}
+
+List<Map<String, String>> _toHandlers(dynamic r) {
+  final out = <Map<String, String>>[];
+  if (r is List) {
+    for (final e in r) {
+      if (e is Map) out.add({for (final en in e.entries) en.key.toString(): en.value.toString()});
+    }
+  }
+  return out;
+}
+
+// لو نفس التطبيق ظهر بأكتر من طريقة فتح، بنرقّمهم علشان تجرّب الأنسب
+void _numberVariants(List<Map<String, String>> hs) {
+  final total = <String, int>{};
+  for (final h in hs) {
+    total[h['pkg'] ?? ''] = (total[h['pkg'] ?? ''] ?? 0) + 1;
+  }
+  final seen = <String, int>{};
+  for (final h in hs) {
+    final p = h['pkg'] ?? '';
+    if ((total[p] ?? 0) > 1) {
+      final n = (seen[p] ?? 0) + 1;
+      seen[p] = n;
+      h['label'] = '${h['label'] ?? p} (طريقة $n)';
+    }
+  }
+}
+
+// بيعرض كل التطبيقات المتاحة وانت تختار. لو اخترت "الافتراضي" بيتحفظ وبعدها بيفتح علطول (وتقدر تمسحه من القايمة)
+Future<Map<String, String>?> chooseHandler(
+  BuildContext context, {
+  required String title,
+  required List<Map<String, String>> handlers,
+  required String prefKey,
+  Map<String, String>? systemOption,
+}) async {
+  final saved = _loadDefaultHandler(prefKey);
+  if (saved != null) {
+    if (systemOption != null && saved['kind'] == systemOption['kind'] && (saved['pkg'] ?? '').isEmpty) {
+      return saved;
+    }
+    if (handlers.any((h) => h['pkg'] == saved['pkg'] && h['cls'] == saved['cls'] && h['kind'] == saved['kind'])) {
+      return saved;
+    }
+  }
+  if (!context.mounted) return null;
+  var makeDefault = false;
+  return showModalBottomSheet<Map<String, String>>(
+    context: context,
+    isScrollControlled: true,
+    builder: (c) => StatefulBuilder(
+      builder: (c, setS) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            CheckboxListTile(
+              value: makeDefault,
+              controlAffinity: ListTileControlAffinity.leading,
+              onChanged: (v) => setS(() => makeDefault = v ?? false),
+              title: const Text('خليه الافتراضي (يفتح علطول المرة الجاية)'),
+            ),
+            for (final h in handlers)
+              ListTile(
+                leading: h['icon'] != null && h['icon']!.isNotEmpty
+                    ? Image.memory(base64Decode(h['icon']!), width: 32, height: 32)
+                    : const Icon(Icons.apps, size: 32),
+                title: Text(h['label'] ?? h['pkg'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
+                onTap: () {
+                  if (makeDefault) _saveDefaultHandler(prefKey, h);
+                  Navigator.pop(c, h);
+                },
+              ),
+            if (systemOption != null)
+              ListTile(
+                leading: const Icon(Icons.folder_special, size: 32),
+                title: Text(systemOption['label'] ?? 'النظام', style: const TextStyle(fontWeight: FontWeight.bold)),
+                onTap: () {
+                  if (makeDefault) _saveDefaultHandler(prefKey, systemOption);
+                  Navigator.pop(c, systemOption);
+                },
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+// بيجيب كل التطبيقات اللي تقدر تفتح فولدر (مدير ملفات) ويخلّيك تختار أي واحد (وتحفظه افتراضي لو عايز)
 Future<bool> chooseAndOpenFolder(BuildContext context, String path) async {
   var handlers = <Map<String, String>>[];
   try {
-    final r = await _chan.invokeMethod<List<dynamic>>('folderHandlers', {'path': path});
-    if (r != null) {
-      handlers = [
-        for (final e in r)
-          {for (final en in (e as Map).entries) en.key.toString(): en.value.toString()}
-      ];
-    }
+    handlers = _toHandlers(await _chan.invokeMethod<List<dynamic>>('folderHandlers', {'path': path}));
   } catch (_) {}
-  // كل تطبيق مرة واحدة (أول طريقة اتجربت هي اللي شغالة)، وبنشيل Termux لأنه مش بيعرض فولدرات
-  final seenPkgs = <String>{};
-  handlers = handlers
-      .where((h) => h['pkg'] != 'com.termux' && seenPkgs.add(h['pkg'] ?? ''))
-      .toList();
+  handlers = handlers.where((h) => h['pkg'] != 'com.termux').toList();
+  _numberVariants(handlers);
   if (!context.mounted) return false;
-  final picked = await showModalBottomSheet<Map<String, String>>(
-    context: context,
-    isScrollControlled: true,
-    builder: (c) => SafeArea(
-      child: ListView(
-        shrinkWrap: true,
-        children: [
-          const ListTile(
-            title: Text('افتح الفولدر بواسطة', style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-          for (final h in handlers)
-            ListTile(
-              leading: h['icon'] != null && h['icon']!.isNotEmpty ? Image.memory(base64Decode(h['icon']!), width: 32, height: 32) : const Icon(Icons.folder, size: 32),
-              title: Text(h['label'] ?? h['pkg'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
-              onTap: () => Navigator.pop(c, h),
-            ),
-          ListTile(
-            leading: const Icon(Icons.folder_special, size: 32),
-            title: const Text('متصفح ملفات النظام', style: const TextStyle(fontWeight: FontWeight.bold)),
-            onTap: () => Navigator.pop(c, <String, String>{'pkg': '', 'cls': '', 'kind': 'tree'}),
-          ),
-        ],
-      ),
-    ),
+  final picked = await chooseHandler(
+    context,
+    title: 'افتح الفولدر بواسطة',
+    handlers: handlers,
+    prefKey: 'defFolder',
+    systemOption: <String, String>{'pkg': '', 'cls': '', 'kind': 'tree', 'label': 'متصفح ملفات النظام'},
   );
   if (picked == null) return true; // المستخدم قفل القايمة
   try {
@@ -3427,6 +3575,39 @@ Future<bool> chooseAndOpenFolder(BuildContext context, String path) async {
     return ok == true;
   } catch (_) {
     return false;
+  }
+}
+
+// اختيار صور/ملفات من أي تطبيق معرض أو ملفات (انت اللي تختار وتحفظ الافتراضي).
+// بترجع null لو الطريقة دي مش متاحة (نرجع لمنتقي الملفات العادي)، ولستة فاضية لو لغيت.
+Future<List<String>?> pickFilesViaChooser(
+  BuildContext context, {
+  required String mime,
+  required String title,
+  required String prefKey,
+}) async {
+  try {
+    var handlers = _toHandlers(await _chan.invokeMethod<List<dynamic>>('pickHandlers', {'mime': mime}));
+    _numberVariants(handlers);
+    if (!context.mounted) return null;
+    final picked = await chooseHandler(
+      context,
+      title: title,
+      handlers: handlers,
+      prefKey: prefKey,
+      systemOption: <String, String>{'pkg': '', 'cls': '', 'kind': 'system', 'label': 'منتقي ملفات النظام'},
+    );
+    if (picked == null) return <String>[];
+    final r = await _chan.invokeMethod<List<dynamic>>('pickWith', {
+      'mime': mime,
+      'pkg': picked['pkg'] ?? '',
+      'cls': picked['cls'] ?? '',
+    });
+    if (r == null) return null;
+    return [for (final e in r) e.toString()];
+  } catch (e) {
+    _dbg('pickFilesViaChooser error: $e');
+    return null;
   }
 }
 
@@ -3638,9 +3819,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   
   Future<void> pickManualImages() async {
     try {
-      final result = await FilePicker.pickFiles(type: FileType.image);
-      if (result.isNotEmpty) {
-        final paths = result.map((f) => f.path).whereType<String>().toList();
+      var paths = await pickFilesViaChooser(context,
+          mime: 'image/*', title: 'اختر تطبيق المعرض', prefKey: 'defImage');
+      if (paths == null) {
+        final result = await FilePicker.pickFiles(type: FileType.image);
+        if (result.isNotEmpty) {
+          paths = result.map((f) => f.path).whereType<String>().toList();
+        }
+      }
+      if (paths != null && paths.isNotEmpty) {
         _runPipelineInner(manualPaths: paths);
       }
     } catch (e) {
@@ -4696,6 +4883,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     );
                   }
                 });
+              } else if (v == 'resetdef') {
+                resetDefaultHandlers(context);
               } else if (v == 'wipe') {
                 wipeEverything(context);
               } else if (v == 'clear') {
@@ -4718,6 +4907,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               const PopupMenuItem(enabled: false, child: Text('الإصدار $kAppVersion')),
               PopupMenuItem(value: 'settings', child: const Text('إعدادات الماكينات (إكسيل)')),
               PopupMenuItem(value: 'clear', enabled: !busy, child: const Text('مسح الكل')),
+              const PopupMenuItem(value: 'resetdef', child: Text('مسح التطبيقات الافتراضية (فولدر/معرض)')),
               PopupMenuItem(
                   value: 'wipe',
                   enabled: !busy,
@@ -6780,9 +6970,15 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   
   Future<void> pickManualPdfs() async {
     try {
-      final result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
-      if (result.isNotEmpty) {
-        final paths = result.map((f) => f.path).whereType<String>().toList();
+      var paths = await pickFilesViaChooser(context,
+          mime: 'application/pdf', title: 'اختر تطبيق الملفات', prefKey: 'defPdf');
+      if (paths == null) {
+        final result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
+        if (result.isNotEmpty) {
+          paths = result.map((f) => f.path).whereType<String>().toList();
+        }
+      }
+      if (paths != null && paths.isNotEmpty) {
         _run(false, false, manualPaths: paths);
       }
     } catch (e) {
@@ -7723,6 +7919,8 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                     );
                   }
                 });
+              } else if (v == 'resetdef') {
+                resetDefaultHandlers(context);
               } else if (v == 'wipe') {
                 wipeEverything(context);
               } else if (v == 'clear') {
@@ -7746,6 +7944,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
               PopupMenuItem(value: 'fast', child: Text(fastCount ? 'العد: سريع ← الدقيق (القديم)' : 'العد: دقيق ← السريع')),
               PopupMenuItem(value: 'settings', child: const Text('إعدادات الماكينات (إكسيل)')),
               PopupMenuItem(value: 'clear', enabled: !busy, child: const Text('مسح الكل')),
+              const PopupMenuItem(value: 'resetdef', child: Text('مسح التطبيقات الافتراضية (فولدر/معرض)')),
               PopupMenuItem(
                   value: 'wipe',
                   enabled: !busy,
