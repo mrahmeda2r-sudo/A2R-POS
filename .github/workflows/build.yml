@@ -138,9 +138,134 @@ jobs:
                               "openFolderWith" -> result.success(openFolderWith(call.argument<String>("path") ?: "", call.argument<String>("pkg") ?: "", call.argument<String>("cls") ?: "", call.argument<String>("kind") ?: ""))
                               "openFile" -> result.success(openFile(call.argument<String>("path") ?: "", call.argument<String>("mime") ?: "*/*"))
                               "shareToWhatsApp" -> result.success(shareToWhatsApp(call.argument<List<String>>("paths") ?: emptyList(), call.argument<String>("text") ?: ""))
+                              "pickHandlers" -> result.success(pickHandlers(call.argument<String>("mime") ?: "*/*"))
+                              "pickWith" -> pickWith(call.argument<String>("mime") ?: "*/*", call.argument<String>("pkg") ?: "", call.argument<String>("cls") ?: "", result)
                               else -> result.notImplemented()
                           }
                       }
+              }
+
+              private var pendingPick: MethodChannel.Result? = null
+
+              private fun drawableToB64(d: android.graphics.drawable.Drawable): String? {
+                  return try {
+                      val w = if (d.intrinsicWidth > 0) d.intrinsicWidth else 96
+                      val h = if (d.intrinsicHeight > 0) d.intrinsicHeight else 96
+                      val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                      val cv = android.graphics.Canvas(bmp)
+                      d.setBounds(0, 0, w, h)
+                      d.draw(cv)
+                      val st = java.io.ByteArrayOutputStream()
+                      bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, st)
+                      android.util.Base64.encodeToString(st.toByteArray(), android.util.Base64.NO_WRAP)
+                  } catch (e: Exception) { null }
+              }
+
+              private fun pickIntent(mime: String): Intent {
+                  val i = Intent(Intent.ACTION_GET_CONTENT)
+                  i.type = mime
+                  i.addCategory(Intent.CATEGORY_OPENABLE)
+                  i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                  return i
+              }
+
+              private fun pickHandlers(mime: String): List<HashMap<String, String>> {
+                  val res = ArrayList<HashMap<String, String>>()
+                  val seen = HashSet<String>()
+                  for (ri in packageManager.queryIntentActivities(pickIntent(mime), android.content.pm.PackageManager.MATCH_ALL)) {
+                      val key = ri.activityInfo.packageName + "|" + ri.activityInfo.name
+                      if (!seen.add(key)) continue
+                      val m = HashMap<String, String>()
+                      m["label"] = ri.loadLabel(packageManager).toString()
+                      m["pkg"] = ri.activityInfo.packageName
+                      m["cls"] = ri.activityInfo.name
+                      m["kind"] = "pick"
+                      m["icon"] = drawableToB64(ri.loadIcon(packageManager)) ?: ""
+                      res.add(m)
+                  }
+                  return res
+              }
+
+              private fun pickWith(mime: String, pkg: String, cls: String, result: MethodChannel.Result) {
+                  pendingPick?.let { try { it.success(ArrayList<String>()) } catch (e: Exception) {} }
+                  pendingPick = null
+                  val i: Intent
+                  if (pkg.isEmpty()) {
+                      i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+                      i.type = mime
+                      i.addCategory(Intent.CATEGORY_OPENABLE)
+                      i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                  } else {
+                      i = pickIntent(mime)
+                      i.setClassName(pkg, cls)
+                  }
+                  try {
+                      pendingPick = result
+                      startActivityForResult(i, 7311)
+                  } catch (e: Exception) {
+                      pendingPick = null
+                      result.success(null)
+                  }
+              }
+
+              private fun uriToPath(uri: Uri): String? {
+                  try {
+                      if (uri.scheme == "file") return uri.path
+                      var name = "picked"
+                      var mtime = 0L
+                      val c = contentResolver.query(uri, null, null, null, null)
+                      if (c != null) {
+                          try {
+                              if (c.moveToFirst()) {
+                                  val ni = c.getColumnIndex("_display_name")
+                                  if (ni >= 0) { val n = c.getString(ni); if (n != null) name = n }
+                                  val di = c.getColumnIndex("_data")
+                                  if (di >= 0) {
+                                      val rp = c.getString(di)
+                                      if (rp != null && File(rp).canRead()) return rp
+                                  }
+                                  val mi = c.getColumnIndex("date_modified")
+                                  if (mi >= 0) mtime = c.getLong(mi) * 1000L
+                                  val li = c.getColumnIndex("last_modified")
+                                  if (li >= 0 && mtime == 0L) mtime = c.getLong(li)
+                              }
+                          } finally { c.close() }
+                      }
+                      val dir = File(cacheDir, "picked")
+                      dir.mkdirs()
+                      val out = File(dir, System.nanoTime().toString() + "_" + name.replace("/", "_"))
+                      val ins = contentResolver.openInputStream(uri) ?: return null
+                      try {
+                          val os = out.outputStream()
+                          try { ins.copyTo(os) } finally { os.close() }
+                      } finally { ins.close() }
+                      if (mtime > 0L) out.setLastModified(mtime)
+                      return out.path
+                  } catch (e: Exception) { return null }
+              }
+
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  if (requestCode != 7311) {
+                      super.onActivityResult(requestCode, resultCode, data)
+                      return
+                  }
+                  val r = pendingPick
+                  pendingPick = null
+                  if (r == null) return
+                  val uris = ArrayList<Uri>()
+                  if (resultCode == android.app.Activity.RESULT_OK && data != null) {
+                      val cd = data.clipData
+                      if (cd != null) {
+                          for (k in 0 until cd.itemCount) { uris.add(cd.getItemAt(k).uri) }
+                      } else if (data.data != null) {
+                          uris.add(data.data!!)
+                      }
+                  }
+                  Thread {
+                      val out = ArrayList<String>()
+                      for (u in uris) { val p = uriToPath(u); if (p != null) out.add(p) }
+                      runOnUiThread { r.success(out) }
+                  }.start()
               }
 
               private fun openFolder(path: String): Boolean {
@@ -164,6 +289,10 @@ jobs:
                   val rel = path.substring(prefix.length)
                   val docUri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + rel)
                   out.add(Pair("doc", Intent(Intent.ACTION_VIEW).setDataAndType(docUri, "vnd.android.document/directory")))
+                  val fileUri = Uri.fromFile(File(path))
+                  for (t in listOf("resource/folder", "application/x-directory", "inode/directory")) {
+                      out.add(Pair("file:" + t, Intent(Intent.ACTION_VIEW).setDataAndType(fileUri, t)))
+                  }
                   try {
                       val fpUri = FileProvider.getUriForFile(this, packageName + ".pos_fileprovider", File(path))
                       for (t in listOf("resource/folder", "application/x-directory", "inode/directory")) {
@@ -187,15 +316,7 @@ jobs:
                           m["pkg"] = pkg
                           m["cls"] = ri.activityInfo.name
                           m["kind"] = p.first
-                          try {
-                              val icon = ri.loadIcon(packageManager)
-                              val bitmap = (icon as? android.graphics.drawable.BitmapDrawable)?.bitmap
-                              if (bitmap != null) {
-                                  val stream = java.io.ByteArrayOutputStream()
-                                  bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
-                                  m["icon"] = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
-                              }
-                          } catch (e: Exception) {}
+                          try { m["icon"] = drawableToB64(ri.loadIcon(packageManager)) ?: "" } catch (e: Exception) {}
                           res.add(m)
                       }
                   }
@@ -220,6 +341,7 @@ jobs:
                   i.setClassName(pkg, cls)
                   i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
                   if (kind == "doc") i.setDataAndType(docUri, "vnd.android.document/directory")
+                  else if (kind.startsWith("file:")) i.setDataAndType(Uri.fromFile(File(path)), kind.substring(5))
                   else try { i.setDataAndType(FileProvider.getUriForFile(this, packageName + ".pos_fileprovider", File(path)), kind.replace("fp:", "")) } catch(e: Exception){}
                   return try { startActivity(i); true } catch (e: Exception) { false }
               }
