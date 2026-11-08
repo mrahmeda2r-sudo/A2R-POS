@@ -1804,8 +1804,22 @@ String? extractUnitName(List<String> texts) {
       }
     }
   }
+  // إيصالات NBE: اسم الوحدة بيبقى سطر بالشكل "EC <الاسم> TRF" (حتى لو OCR دمجه مع سطر تاني)
+  final ecRe = RegExp(r'\bE\s?C\s+([A-Z0-9][A-Z0-9 \-]{2,40}?)\s+TR[FE]\b');
+  final ecFound = <String>[];
+  for (final t in texts) {
+    for (final l in t.split('\n')) {
+      final m = ecRe.firstMatch(l.toUpperCase());
+      if (m != null) {
+        final n = _cleanUnitName('EC ${m.group(1)!.trim()} TRF');
+        if (n != null) ecFound.add(n);
+      }
+    }
+  }
+  final ecBest = mostCommon(ecFound)?.key;
+  if (ecBest != null) return ecBest;
   final skip = RegExp(
-      r'NATIONAL|BANK|\bNBE\b|EGYPT|RECEIPT|CUSTOMER|COPY|MERCHANT|TERMINAL|BATCH|DATE|TIME|SALE|TOTAL|AMOUNT|VISA|MASTER|MEEZ|THANK|SUCCESS|CLOSED|CARD|APPROVAL|\bRRN\b|TRACE|VERSION|GRAND|REPORT|SETTLEMENT',
+      r'NATIONAL|BANK|\bNBE\b|EGYPT|RECEIPT|CUSTOMER|COPY|MERCHANT|TERMINAL|BATCH|DATE|TIME|SALE|TOTAL|AMOUNT|VISA|MASTER|MEEZ|THANK|SUCCESS|CLOSED|CARD|APPROVAL|\bRRN\b|TRACE|VERSION|GRAND|REPORT|SETTLEMENT|\bST\b|STREET|ALEX|CAIRO|\b02F\b|INSIDE|NEXT\s*TO|\bFRON',
       caseSensitive: false);
   // اسم الوحدة بيبقى تحت سطر "NATIONAL BANK OF EGYPT" على طول (قبل سطر العنوان)
   final bankLine = RegExp(r'BANK\s*OF\s*EGYPT|NATIONAL\s*BANK|^\s*NBE\s*$', caseSensitive: false);
@@ -3468,21 +3482,10 @@ List<Map<String, String>> _toHandlers(dynamic r) {
   return out;
 }
 
-// لو نفس التطبيق ظهر بأكتر من طريقة فتح، بنرقّمهم علشان تجرّب الأنسب
+// لو نفس التطبيق ظهر بأكتر من طريقة فتح، بنسيب الطريقة الأولى (الشغالة) وبنشيل الباقي (طريقة 2 مش شغالة)
 void _numberVariants(List<Map<String, String>> hs) {
-  final total = <String, int>{};
-  for (final h in hs) {
-    total[h['pkg'] ?? ''] = (total[h['pkg'] ?? ''] ?? 0) + 1;
-  }
-  final seen = <String, int>{};
-  for (final h in hs) {
-    final p = h['pkg'] ?? '';
-    if ((total[p] ?? 0) > 1) {
-      final n = (seen[p] ?? 0) + 1;
-      seen[p] = n;
-      h['label'] = '${h['label'] ?? p} (طريقة $n)';
-    }
-  }
+  final seen = <String>{};
+  hs.removeWhere((h) => !seen.add(h['pkg'] ?? ''));
 }
 
 // بيعرض كل التطبيقات المتاحة وانت تختار. لو اخترت "الافتراضي" بيتحفظ وبعدها بيفتح علطول (وتقدر تمسحه من القايمة)
