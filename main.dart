@@ -3521,12 +3521,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     todo.sort((a, b) => baseName(a.path).compareTo(baseName(b.path)));
 
+    sourceNote = '';
     if (manualPaths != null) {
       todo.addAll(manualPaths.map((p) => File(p)));
       sourceNote = '• المصدر: صور محددة يدوياً (${todo.length} صورة)';
     }
-
-    sourceNote = '';
 
     // فولدر اخترته بإيدك (مش واتساب): أي ملف PDF جواه بيتفحص، بأي اسم وبأي تاريخ
     if (customDir != null && customDir != outputDir) {
@@ -3538,7 +3537,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
       } catch (_) {}
       cpdfs.sort((a, b) => baseName(a.path).compareTo(baseName(b.path)));
-    if (manualPaths != null) pdfs.addAll(manualPaths.map((p) => File(p)));
       var pdfPages = 0;
       final used = <String>[];
       for (final pf in cpdfs) {
