@@ -333,6 +333,9 @@ Future<void> loadSettingsFromExcel() async {
     tidFix
       ..clear()
       ..addAll(newFix);
+    // ترمنلات وهمية اتسجلت غلط من الـ MERCHANT ID (رقمها جزء من كود تاجر): بنشيلها
+    terminals.removeWhere((tid, _) =>
+        tid.length == 8 && merchantCodeMap.keys.any((k) => k.length >= 10 && k.contains(tid)));
     rebuildTerminalIndexes();
   } catch (e) {
     _dbg('Excel load error: $e');
@@ -1746,16 +1749,16 @@ String? batchNo(List<String> texts) {
 
 // ───────────── الماكينة / الوحدة / التاريخ ─────────────
 String? _tidLabeledRaw(String t) {
-  final m = RegExp(r"TERMINAL\s*(?:ID)?\D{0,15}?(\d[\d\s/]{6,9}\d)",
+  final m = RegExp(r"TERMINAL\s*(?:ID)?\D{0,15}?(\d[\d\s/]{6,13}\d)",
           caseSensitive: false)
       .firstMatch(t);
   if (m == null) return null;
   final raw = m.group(1)!.replaceAll('/', '7').replaceAll(RegExp(r'\D'), '');
-  if (raw.length < 8) return null;
+  // رقم الترمنل 8 أرقام. أي رقم أطول (زي MERCHANT ID اللي OCR أحياناً يحطه جنب TERMINAL) بنتجاهله
+  if (raw.length < 8 || raw.length > 9 || raw.startsWith('0011')) return null;
   final d = raw.substring(raw.length - 8);
   return tidFix[d] ?? d;
 }
-
 String? _tidLabeled(String t) {
   final d = _tidLabeledRaw(t);
   return d != null && terminals.containsKey(d) ? d : null;
@@ -1902,9 +1905,20 @@ void learnMerchant(String tid, List<String> texts) {
 // ماكينة جديدة مكتوبة على الإيصال (Terminal ID) ومش في القايمة: بنسجّلها هي ووحدتها وبنحفظها في ملف الإعدادات
 String? discoverTerminal(List<String> texts) {
   final counts = <String, int>{};
+  final midNow = extractMerchantId(texts);
+  bool inMerchant(String d) => midNow != null && midNow.contains(d);
   for (final t in texts) {
     final d = _tidLabeledRaw(t);
-    if (d != null) counts[d] = (counts[d] ?? 0) + 1;
+    if (d != null && !inMerchant(d)) counts[d] = (counts[d] ?? 0) + 1;
+  }
+  if (counts.isEmpty) {
+    // لو الـ OCR لخبط ترتيب الأسطر: رقم من 8 أرقام بيبدأ بـ 50 واقف لوحده
+    for (final t in texts) {
+      for (final m in RegExp(r'(?<!\d)(50\d{6})(?!\d)').allMatches(t)) {
+        final d = tidFix[m.group(1)!] ?? m.group(1)!;
+        if (!inMerchant(d)) counts[d] = (counts[d] ?? 0) + 1;
+      }
+    }
   }
   if (counts.isEmpty) return null;
   final tid = counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
