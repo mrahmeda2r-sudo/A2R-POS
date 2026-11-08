@@ -22,6 +22,9 @@ import 'package:excel/excel.dart' as ex;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await appSettings.load();
+  try {
+    if (await Permission.manageExternalStorage.isGranted) await ensureDefaultFiles();
+  } catch (_) {}
   await loadSettingsFromExcel();
   FlutterError.onError = (d) {
     _dbg('FLUTTER_ERROR ${d.exceptionAsString()}');
@@ -243,31 +246,200 @@ Widget _bottomBar(Widget button, {bool busy = false, double? progress}) => Mater
 const String kAppVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'تجريبي');
 
 
+String _cellText(ex.Data? d) {
+  final v = d?.value;
+  if (v == null) return '';
+  var t = v.toString().trim();
+  if (RegExp(r'^\d+\.0+$').hasMatch(t)) t = t.substring(0, t.indexOf('.'));
+  return t;
+}
+
+int? _cellInt(ex.Data? d) {
+  final t = _cellText(d);
+  return int.tryParse(t) ?? double.tryParse(t)?.toInt();
+}
+
+// بيقرا ملف الإعدادات (الماكينات / كلمات الوحدات / أكواد التاجر / تصحيح الأرقام). لو مفيش ملف الإعدادات فاضية.
 Future<void> loadSettingsFromExcel() async {
   try {
     final f = File(settingsPath);
-    if (!f.existsSync()) return;
-    final bytes = f.readAsBytesSync();
-    final excel = ex.Excel.decodeBytes(bytes);
-    
-    final termSheet = excel.tables['Terminals'];
-    if (termSheet != null) {
+    if (!f.existsSync()) {
       terminals.clear();
-      for (var i = 1; i < termSheet.maxRows; i++) {
-        final row = termSheet.rows[i];
-        if (row.length >= 4 && row[1]?.value != null) {
-          final order = int.tryParse(row[0]?.value.toString() ?? '');
-          final tid = row[1]?.value.toString().trim();
-          final xlRow = int.tryParse(row[2]?.value.toString() ?? '');
-          final name = row[3]?.value.toString().trim();
-          if (order != null && tid != null && xlRow != null && name != null) {
-            terminals[tid] = TerminalInfo(order, xlRow, name);
-          }
-        }
-      }
+      tidFix.clear();
+      merchantCodeMap.clear();
+      nameHints.clear();
+      rebuildTerminalIndexes();
+      return;
     }
+    final excel = ex.Excel.decodeBytes(f.readAsBytesSync());
+
+    List<List<ex.Data?>> rowsOf(String name) {
+      final sh = excel.tables[name];
+      if (sh == null || sh.maxRows < 2) return <List<ex.Data?>>[];
+      return sh.rows.skip(1).toList();
+    }
+
+    final newTerms = <String, TerminalInfo>{};
+    for (final r in rowsOf('Terminals')) {
+      if (r.length < 3) continue;
+      final order = _cellInt(r[0]);
+      final tid = _cellText(r[1]);
+      final xlRow = _cellInt(r[2]);
+      var name = r.length > 3 ? _cellText(r[3]) : '';
+      if (order == null || tid.isEmpty || xlRow == null) continue;
+      if (name.isEmpty) name = 'وحدة $xlRow';
+      newTerms[tid] = TerminalInfo(order, xlRow, name);
+    }
+
+    final newHints = <MapEntry<List<String>, int>>[];
+    for (final r in rowsOf('Name_Hints')) {
+      if (r.length < 2) continue;
+      final row = _cellInt(r[0]);
+      final kws = _cellText(r[1])
+          .split(RegExp(r'[,;،|]'))
+          .map((e) => e.trim().toUpperCase())
+          .where((e) => e.isNotEmpty)
+          .toList();
+      if (row != null && kws.isNotEmpty) newHints.add(MapEntry(kws, row));
+    }
+
+    final newMerch = <String, int>{};
+    for (final r in rowsOf('Merchant_Codes')) {
+      if (r.length < 2) continue;
+      final code = _cellText(r[0]);
+      final row = _cellInt(r[1]);
+      if (code.isNotEmpty && row != null) newMerch[code] = row;
+    }
+
+    final newFix = <String, String>{};
+    for (final r in rowsOf('TID_Fixes')) {
+      if (r.length < 2) continue;
+      final wrong = _cellText(r[0]);
+      final right = _cellText(r[1]);
+      if (wrong.isNotEmpty && right.isNotEmpty) newFix[wrong] = right;
+    }
+
+    terminals
+      ..clear()
+      ..addAll(newTerms);
+    nameHints
+      ..clear()
+      ..addAll(newHints);
+    merchantCodeMap
+      ..clear()
+      ..addAll(newMerch);
+    tidFix
+      ..clear()
+      ..addAll(newFix);
+    rebuildTerminalIndexes();
   } catch (e) {
     _dbg('Excel load error: $e');
+  }
+}
+
+// بيكتب الماكينات والوحدات اللي اتعرفت (من الإيصالات أو من الملف) في ملف الإعدادات
+bool saveSettingsToExcel() {
+  try {
+    final f = File(settingsPath);
+    f.parent.createSync(recursive: true);
+    final excel = ex.Excel.createExcel();
+    final order = terminals.entries.toList()..sort((a, b) => a.value.orderNum.compareTo(b.value.orderNum));
+    excel.appendRow('Terminals', <ex.CellValue?>[
+      ex.TextCellValue('Order'),
+      ex.TextCellValue('TID'),
+      ex.TextCellValue('Row'),
+      ex.TextCellValue('Unit_Name'),
+    ]);
+    for (final e in order) {
+      excel.appendRow('Terminals', <ex.CellValue?>[
+        ex.IntCellValue(e.value.orderNum),
+        ex.TextCellValue(e.key),
+        ex.IntCellValue(e.value.excelRow),
+        ex.TextCellValue(e.value.unitName),
+      ]);
+    }
+    excel.appendRow('Name_Hints', <ex.CellValue?>[ex.TextCellValue('Row'), ex.TextCellValue('Keywords')]);
+    for (final h in nameHints) {
+      excel.appendRow('Name_Hints', <ex.CellValue?>[ex.IntCellValue(h.value), ex.TextCellValue(h.key.join(','))]);
+    }
+    excel.appendRow('Merchant_Codes', <ex.CellValue?>[ex.TextCellValue('Merchant_Code'), ex.TextCellValue('Row')]);
+    for (final e in merchantCodeMap.entries) {
+      excel.appendRow('Merchant_Codes', <ex.CellValue?>[ex.TextCellValue(e.key), ex.IntCellValue(e.value)]);
+    }
+    excel.appendRow('TID_Fixes', <ex.CellValue?>[ex.TextCellValue('Wrong_TID'), ex.TextCellValue('Correct_TID')]);
+    for (final e in tidFix.entries) {
+      excel.appendRow('TID_Fixes', <ex.CellValue?>[ex.TextCellValue(e.key), ex.TextCellValue(e.value)]);
+    }
+    try {
+      excel.delete('Sheet1');
+    } catch (_) {}
+    final bytes = excel.save();
+    if (bytes == null) return false;
+    f.writeAsBytesSync(bytes);
+    return true;
+  } catch (e) {
+    _dbg('settings save error: $e');
+    return false;
+  }
+}
+
+// أول مرة: بينسخ ملفي الإعدادات والقالب (المرفوعين مع المشروع) لمجلد التطبيق لو مش موجودين
+Future<void> ensureDefaultFiles() async {
+  try {
+    Directory(baseDir).createSync(recursive: true);
+    final st = File(settingsPath);
+    if (!st.existsSync()) {
+      try {
+        final d = await rootBundle.load('assets/A2R_Settings.xlsx');
+        st.writeAsBytesSync(d.buffer.asUint8List());
+      } catch (_) {}
+    }
+    final tp = File('$baseDir/template.xlsx');
+    if (!tp.existsSync()) {
+      try {
+        final d = await rootBundle.load('assets/template.xlsx');
+        tp.writeAsBytesSync(d.buffer.asUint8List());
+      } catch (_) {}
+    }
+  } catch (e) {
+    _dbg('default files error: $e');
+  }
+}
+
+// بيعمل ملف الإعدادات فاضي (بالعناوين بس) لو مش موجود، عشان المستخدم يملاه
+Future<bool> ensureSettingsFile() async {
+  try {
+    await ensureDefaultFiles();
+    final f = File(settingsPath);
+    if (f.existsSync()) return true;
+    f.parent.createSync(recursive: true);
+    final excel = ex.Excel.createExcel();
+    void addSheet(String name, List<String> rows) {
+      for (final line in rows) {
+        excel.appendRow(name, <ex.CellValue?>[for (final c in line.split('|')) ex.TextCellValue(c)]);
+      }
+    }
+
+    addSheet('Terminals', ['Order|TID|Row|Unit_Name']);
+    addSheet('Name_Hints', ['Row|Keywords']);
+    addSheet('Merchant_Codes', ['Merchant_Code|Row']);
+    addSheet('TID_Fixes', ['Wrong_TID|Correct_TID']);
+    addSheet('README', [
+      'Terminals: Order = رقم الماكينة (1,2,3...) | TID = رقم الترمنل المكتوب على الإيصال | Row = رقم صف الوحدة في ملف الإكسيل | Unit_Name = اسم الوحدة',
+      'Name_Hints: كلمات (بالإنجليزي، مفصولة بفاصلة) لو ظهرت في الإيصال تتعرف الوحدة',
+      'Merchant_Codes: كود التاجر -> رقم الصف',
+      'TID_Fixes: رقم ترمنل بتقرأه OCR غلط -> الرقم الصح',
+    ]);
+    try {
+      excel.delete('Sheet1');
+    } catch (_) {}
+    final bytes = excel.save();
+    if (bytes == null) return false;
+    f.writeAsBytesSync(bytes);
+    return true;
+  } catch (e) {
+    _dbg('settings create error: $e');
+    return false;
   }
 }
 
@@ -340,7 +512,7 @@ class _RootPageState extends State<RootPage> {
   }
 }
 
-const String kAppName = 'A2R POS';
+const String kAppName = 'A2R POS Public';
 const String kAppAuthor = 'Ahmed Ramadan - Alexandria';
 
 // ───────────────────── الإعدادات: اللغة + الدارك مود ─────────────────────
@@ -690,7 +862,6 @@ const List<List<String>> _kEnPhrases = [
   ['إجمالي بعيد عن المعتاد', 'Total far from usual'],
   ['القراءة التانية للمبلغ', 'The second amount reading'],
   ['صورة من الصور المرتبة', 'image(s) from the sorted images'],
-  ['اختر الماكينة (1..19)', 'Select machine (1..19)'],
   ['جاري فحص الإيصالات...', 'Scanning receipts...'],
   ['ولا يوجد ملف PDF باسم', 'and there is no PDF file named'],
   ['لو المبلغ صح اضغط حفظ', 'if the amount is correct, tap Save'],
@@ -726,7 +897,6 @@ const List<List<String>> _kEnPhrases = [
   ['مش تبع نفس اليوم:', 'Not from the same day:'],
   ['بس التسمية ماكينة', 'but the naming says machine'],
   ['لوج إيصالات الدفع', 'Payment receipts log'],
-  ['ميناء الإسكندرية', 'Alexandria Port'],
   ['الأيام اللي فاتت', 'previous days'],
   ['تم توليد الإكسيل', 'Excel generated'],
   ['ملاحظات للمراجعة', 'Notes for review'],
@@ -770,7 +940,6 @@ const List<List<String>> _kEnPhrases = [
   ['اتسمّى واتنسخ', 'named and copied'],
   ['تعريف الملفات', 'Identifying files'],
   ['عدّ الإيصالات', 'Counting receipts'],
-  ['مديرية الأمن', 'Security Directorate'],
   ['قراءة تانية:', 'Second reading:'],
   ['فشلت القراءة', 'read failed'],
   ['نفس الماكينة', 'Same machine'],
@@ -791,7 +960,6 @@ const List<List<String>> _kEnPhrases = [
   ['اكتمل العد:', 'Counting complete:'],
   ['إرسال الملف', 'Send file'],
   ['تغيير اللغة', 'Change language'],
-  ['مصطفى كامل', 'Mostafa Kamel'],
   ['الإسكندرية', 'Alexandria'],
   ['ملء الشاشة', 'Full screen'],
   ['بس التسلسل', 'but the sequence'],
@@ -800,8 +968,6 @@ const List<List<String>> _kEnPhrases = [
   ['إرسال الكل', 'Send all'],
   ['اتراجع: صح', 'Reviewed: correct'],
   ['إعادة العد', 'Recount'],
-  ['برج العرب', 'Borg El Arab'],
-  ['خدمات مصر', 'Misr Services'],
   ['مختلفة عن', 'differs from'],
   ['اتأكد منه', 'verify it'],
   ['غير مقروء', 'unreadable'],
@@ -816,9 +982,6 @@ const List<List<String>> _kEnPhrases = [
   ['عدّ سريع', 'Quick count'],
   ['بدء العد', 'Start counting'],
   ['التقفيل', 'Closing'],
-  ['المنتزه', 'El Montaza'],
-  ['محرم بك', 'Moharram Bek'],
-  ['القباري', 'El Qabbary'],
   ['ماكينات', 'Machines'],
   ['والأغلب', 'while most are'],
   ['المبلغ:', 'Amount:'],
@@ -826,7 +989,6 @@ const List<List<String>> _kEnPhrases = [
   ['افتراضي', 'default'],
   ['التسلسل', 'Sequence'],
   ['الفترة', 'Period'],
-  ['العجمي', 'El Agamy'],
   ['هتتمسح', 'Will delete'],
   ['تم مسح', 'Deleted'],
   ['ماكينة', 'Machine'],
@@ -847,7 +1009,6 @@ const List<List<String>> _kEnPhrases = [
   ['العدد', 'Count'],
   ['مقروء', 'read'],
   ['أيام', 'days'],
-  ['أبيس', 'Abis'],
   ['قالب', 'Template'],
   ['باتش', 'batch'],
   ['ناقص', 'missing'],
@@ -1027,74 +1188,31 @@ class TerminalInfo {
   const TerminalInfo(this.orderNum, this.excelRow, this.unitName);
 }
 
-final Map<String, TerminalInfo> terminals = {
-  "50335710": const TerminalInfo(1, 2, "أبيس"),
-  "50335993": const TerminalInfo(2, 2, "أبيس"),
-  "50335987": const TerminalInfo(3, 2, "أبيس"),
-  "50325716": const TerminalInfo(4, 3, "برج العرب"), // برج العرب 1
-  "50335998": const TerminalInfo(5, 3, "برج العرب"), // برج العرب 2
-  "50335994": const TerminalInfo(6, 3, "برج العرب"), // برج العرب 3
-  "50335711": const TerminalInfo(7, 3, "برج العرب"), // برج العرب 4
-  "50382298": const TerminalInfo(8, 4, "المنتزه"), // المنتزه 1
-  "50382315": const TerminalInfo(9, 4, "المنتزه"), // المنتزه 2
-  "50383712": const TerminalInfo(10, 4, "المنتزه"), // المنتزه 3
-  "50382306": const TerminalInfo(11, 5, "محرم بك"), // محرم بك 1
-  "50382316": const TerminalInfo(12, 5, "محرم بك"), // محرم بك 2
-  "50382308": const TerminalInfo(13, 6, "العجمي"), // العجمي 1
-  "50383706": const TerminalInfo(14, 6, "العجمي"), // العجمي 2
-  "50382300": const TerminalInfo(15, 7, "القباري"),
-  "50383702": const TerminalInfo(16, 8, "مصطفى كامل"),
-  "50382312": const TerminalInfo(17, 9, "مديرية الأمن"),
-  "50383699": const TerminalInfo(18, 10, "ميناء الإسكندرية"),
-  "50383700": const TerminalInfo(19, 11, "خدمات مصر"),
-};
-
-final Map<int, String> numToTid = {
-  1: "50335710", 2: "50335993", 3: "50335987",
-  4: "50325716", 5: "50335998", 6: "50335994", 7: "50335711",
-  8: "50382298", 9: "50382315", 10: "50383712",
-  11: "50382306", 12: "50382316",
-  13: "50382308", 14: "50383706",
-  15: "50382300", 16: "50383702", 17: "50382312",
-  18: "50383699", 19: "50383700",
-};
-
-final Map<String, String> tidFix = {
-  "50336994": "50335994",
-  "50336711": "50335711",
-  "50336998": "50335998",
-  "50302316": "50382316",
-  "50382318": "50382315",
-  "50330987": "50335987",
-  "60382308": "50382308",
-};
-
-// (فاضي) المنتزه 3 = 50383712 ماكينة مستقلة
+// النسخة العامة: مفيش ماكينات ولا وحدات مكتوبة في الكود. كله بيتقرأ من ملف A2R_Settings.xlsx
+final Map<String, TerminalInfo> terminals = {};
+final Map<int, String> numToTid = {};
+final Map<String, String> tidFix = {};
 final Map<String, String> tidAlias = {};
+final Map<String, int> merchantCodeMap = {};
+final List<MapEntry<List<String>, int>> nameHints = [];
+final Map<int, String> rowNames = {};
 
-final Map<String, int> merchantCodeMap = {
-  "22": 2, "23": 3, "24": 4, "25": 5, "26": 6,
-  "27": 7, "28": 8, "29": 9, "30": 10, "31": 11,
-};
+// بيبني الفهارس (رقم الماكينة -> TID ، رقم الصف -> اسم الوحدة) من الماكينات المحمّلة
+void rebuildTerminalIndexes() {
+  numToTid.clear();
+  rowNames.clear();
+  for (final e in terminals.entries) {
+    numToTid[e.value.orderNum] = e.key;
+    rowNames.putIfAbsent(e.value.excelRow, () => e.value.unitName);
+  }
+}
 
-final List<MapEntry<List<String>, int>> nameHints = [
-  MapEntry(["ABYSS", "ABIS"], 2),
-  MapEntry(["BURJ", "BORG"], 3),
-  MapEntry(["MONTZAH", "TOSUN"], 4),
-  MapEntry(["MUHRAM", "MOHARAM"], 5),
-  MapEntry(["AJAMI", "AGAMI"], 6),
-  MapEntry(["KABBARY", "KABARY"], 7),
-  MapEntry(["MUSTAFA", "KAMEL"], 8),
-  MapEntry(["MODRYT", "MODERYT"], 9),
-  MapEntry(["ALEXANDRIA PORT", "ESMAT"], 10),
-  MapEntry(["EC ESC", "ELZREA", "ESC ALEX", "KHADAMAT"], 11),
-];
+List<int> machineNums() => numToTid.keys.toList()..sort();
 
-final Map<int, String> rowNames = {
-  2: "أبيس", 3: "برج العرب", 4: "المنتزه", 5: "محرم بك",
-  6: "العجمي", 7: "القباري", 8: "مصطفى كامل", 9: "مديرية الأمن",
-  10: "ميناء الإسكندرية", 11: "خدمات مصر",
-};
+String machineLabel(int i) {
+  final t = terminals[numToTid[i]];
+  return 'ماكينة $i${t == null || t.unitName.isEmpty ? '' : ' - ${t.unitName}'}';
+}
 
 // ───────────────────── خوارزميات الاستخراج (منقولة من نسخة البايثون) ─────────────────────
 final List<RegExp> _markers = [
@@ -1401,23 +1519,124 @@ String? batchNo(List<String> texts) {
 }
 
 // ───────────── الماكينة / الوحدة / التاريخ ─────────────
-String? _tidLabeled(String t) {
+String? _tidLabeledRaw(String t) {
   final m = RegExp(r"TERMINAL\s*(?:ID)?\D{0,15}?(\d[\d\s/]{6,9}\d)",
           caseSensitive: false)
       .firstMatch(t);
   if (m == null) return null;
   final raw = m.group(1)!.replaceAll('/', '7').replaceAll(RegExp(r'\D'), '');
   if (raw.length < 8) return null;
-  var d = raw.substring(raw.length - 8);
-  d = tidFix[d] ?? d;
-  return terminals.containsKey(d) ? d : null;
+  final d = raw.substring(raw.length - 8);
+  return tidFix[d] ?? d;
+}
+
+String? _tidLabeled(String t) {
+  final d = _tidLabeledRaw(t);
+  return d != null && terminals.containsKey(d) ? d : null;
+}
+
+// ───────────── تعلّم الماكينات والوحدات من الإيصالات ─────────────
+int _editDistance(String a, String b) {
+  if (a == b) return 0;
+  if (a.isEmpty) return b.length;
+  if (b.isEmpty) return a.length;
+  var prev = List<int>.generate(b.length + 1, (i) => i);
+  for (var i = 1; i <= a.length; i++) {
+    final cur = List<int>.filled(b.length + 1, 0);
+    cur[0] = i;
+    for (var j = 1; j <= b.length; j++) {
+      final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+      cur[j] = math.min(math.min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+String _normUnit(String s) => s.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9\u0600-\u06FF]'), '');
+
+String? _cleanUnitName(String raw) {
+  final s = raw
+      .replaceAll(RegExp(r'[^A-Za-z0-9\u0600-\u06FF \-]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  final letters = RegExp(r'[A-Za-z\u0600-\u06FF]').allMatches(s).length;
+  final digits = RegExp(r'\d').allMatches(s).length;
+  if (letters < 4 || digits > letters) return null;
+  return s.length > 40 ? s.substring(0, 40).trim() : s;
+}
+
+// اسم الوحدة المكتوب على الإيصال: بعد كلمة MERCHANT NAME لو موجودة، وإلا أول سطر اسم في أعلى الإيصال
+String? extractUnitName(List<String> texts) {
+  final label = RegExp(r'MERCHANT\s*NAME\s*[:\-]?\s*(.+)', caseSensitive: false);
+  for (final t in texts) {
+    for (final l in t.split('\n')) {
+      final m = label.firstMatch(l.trim());
+      if (m != null) {
+        final n = _cleanUnitName(m.group(1)!);
+        if (n != null) return n;
+      }
+    }
+  }
+  final skip = RegExp(
+      r'NATIONAL|BANK|\bNBE\b|EGYPT|RECEIPT|CUSTOMER|COPY|MERCHANT|TERMINAL|BATCH|DATE|TIME|SALE|TOTAL|AMOUNT|VISA|MASTER|MEEZ|THANK|SUCCESS|CLOSED|CARD|APPROVAL|\bRRN\b|TRACE|VERSION|GRAND|REPORT|SETTLEMENT',
+      caseSensitive: false);
+  for (final t in texts) {
+    var seen = 0;
+    for (final raw in t.split('\n')) {
+      final l = raw.trim();
+      if (l.isEmpty) continue;
+      if (++seen > 8) break;
+      if (skip.hasMatch(l)) continue;
+      final n = _cleanUnitName(l);
+      if (n != null) return n;
+    }
+  }
+  return null;
+}
+
+int _rowForUnitName(String name) {
+  final k = _normUnit(name);
+  for (final e in rowNames.entries) {
+    final o = _normUnit(e.value);
+    if (o == k) return e.key;
+    final mx = math.max(o.length, k.length);
+    if (mx >= 6 && _editDistance(o, k) <= (mx * 0.15).floor()) return e.key;
+  }
+  var mxRow = 1;
+  for (final r in rowNames.keys) {
+    if (r > mxRow) mxRow = r;
+  }
+  return mxRow + 1;
+}
+
+// ماكينة جديدة مكتوبة على الإيصال (Terminal ID) ومش في القايمة: بنسجّلها هي ووحدتها وبنحفظها في ملف الإعدادات
+String? discoverTerminal(List<String> texts) {
+  final counts = <String, int>{};
+  for (final t in texts) {
+    final d = _tidLabeledRaw(t);
+    if (d != null) counts[d] = (counts[d] ?? 0) + 1;
+  }
+  if (counts.isEmpty) return null;
+  final tid = counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+  if (terminals.containsKey(tid)) return tid;
+  final name = extractUnitName(texts) ?? 'Unit $tid';
+  final row = _rowForUnitName(name);
+  var order = 0;
+  for (final t in terminals.values) {
+    if (t.orderNum > order) order = t.orderNum;
+  }
+  terminals[tid] = TerminalInfo(order + 1, row, rowNames[row] ?? name);
+  rebuildTerminalIndexes();
+  saveSettingsToExcel();
+  return tid;
 }
 
 String? _tidLoose(String t) {
   for (final tid in terminals.keys) {
     if (t.contains(tid)) return tid;
   }
-  for (final m in RegExp(r"\b(503\d{5})\b").allMatches(t)) {
+  for (final m in RegExp(r"\b(\d{8})\b").allMatches(t)) {
     var c = m.group(1)!;
     c = tidFix[c] ?? c;
     if (terminals.containsKey(c)) return c;
@@ -1448,7 +1667,6 @@ String? findTerminalFuzzyIn(List<String> texts, int? targetRow) {
       final digits = run.group(0)!.replaceAll('/', '7').replaceAll(RegExp(r'\D'), '');
       for (var i = 0; i + 8 <= digits.length; i++) {
         final cand = digits.substring(i, i + 8);
-        if (!cand.startsWith('50') && !cand.startsWith('60')) continue;
         for (final tid in pool) {
           var d = 0;
           for (var k = 0; k < 8; k++) {
@@ -1478,6 +1696,9 @@ int? findUnitExtraIn(List<String> texts) {
       final mm = RegExp(r"11470?(2[2-9]|3[01])084").firstMatch(d);
       if (mm != null && merchantCodeMap.containsKey(mm.group(1))) {
         return merchantCodeMap[mm.group(1)];
+      }
+      for (final e in merchantCodeMap.entries) {
+        if (e.key.length >= 6 && d.contains(e.key)) return e.value;
       }
     }
   }
@@ -1562,7 +1783,7 @@ Analysis analyzeLines(List<OcrLine> all) {
   }
 
   final date = findDateIn(allTexts);
-  var tid = findTerminalIn(allTexts);
+  var tid = findTerminalIn(allTexts) ?? discoverTerminal(allTexts);
   var how = 'terminal';
   int? row;
   String? name;
@@ -1646,7 +1867,7 @@ Future<List<File>> extractPdfPages(File pdf) async {
 
 // ───────────────────── مسارات المجلدات ─────────────────────
 const String root = '/storage/emulated/0';
-final String baseDir = '$root/A2R-POS';
+final String baseDir = '$root/A2R-POS-Public';
 final String rawImagesDir = '$baseDir/raw_images';
 String outputDir = '$baseDir'; // ممكن المستخدم يغيّره من الشاشة
 final String defaultOutputDir = '$baseDir';
@@ -2250,6 +2471,8 @@ Future<List<String>> scanReceiptAsync(String src) async {
 // ───────────────── ملء القالب مباشرة جوه ملف الـ xlsx (من غير ما نبوّظ التنسيق) ─────────────────
 Future<List<int>?> loadTemplateBytes() async {
   try {
+    final mine = File('$baseDir/template.xlsx');
+    if (mine.existsSync()) return mine.readAsBytesSync();
     final exact = File('$baseDir/الاسكندريه 00.xlsx');
     if (exact.existsSync()) return exact.readAsBytesSync();
     final d = Directory(baseDir);
@@ -2370,28 +2593,124 @@ String _setCell(String xml, String col, int row,
   return xml.replaceRange(rm.start, rm.end, rowXml);
 }
 
-List<int> fillTemplate(List<int> bytes, Map<int, double> totals) {
+class _UnitOut {
+  final String name;
+  final int count;
+  final double amount;
+  _UnitOut(this.name, this.count, this.amount);
+}
+
+String _xmlEsc(String s) =>
+    s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+
+String _numStr(double v) {
+  final r = double.parse(v.toStringAsFixed(2));
+  return r == r.roundToDouble() ? r.toInt().toString() : r.toString();
+}
+
+// بيبني صفحة النتايج: صف العناوين زي ما هو، وصف لكل وحدة بنفس تنسيق أول صف بيانات في القالب
+// (عدد الصفوف = عدد الوحدات اللي اتعرفت من الفحص، بيزيد أو بيقل حسب العدد)
+String buildUnitsSheetXml(String xml, List<_UnitOut> units) {
+  final sd = RegExp(r'<sheetData\b[^>]*?(?:/>|>(.*?)</sheetData>)', dotAll: true).firstMatch(xml);
+  if (sd == null) throw Exception('sheetData missing');
+  final inner = sd.group(1) ?? '';
+  final rowRe = RegExp(r'<row\b[^>]*?(?:/>|>.*?</row>)', dotAll: true);
+  final header = StringBuffer();
+  String? proto;
+  for (final m in rowRe.allMatches(inner)) {
+    final row = m.group(0)!;
+    final n = int.tryParse(RegExp(r'\br="(\d+)"').firstMatch(row)?.group(1) ?? '') ?? 0;
+    if (n <= 1) {
+      header.write(row);
+    } else {
+      proto ??= row;
+    }
+  }
+  final cellRe = RegExp(r'<c\b[^>]*?/>|<c\b[^>]*?>.*?</c>', dotAll: true);
+  final protoCells = <String, String>{};
+  var rowOpen = '';
+  if (proto != null) {
+    rowOpen = RegExp(r'<row\b[^>]*?(?=/?>)').firstMatch(proto)!.group(0)!;
+    for (final m in cellRe.allMatches(proto)) {
+      final cell = m.group(0)!;
+      final open = RegExp(r'<c\b[^>]*?/?>').firstMatch(cell)!.group(0)!;
+      final col = RegExp(r'\br="([A-Z]+)\d+"').firstMatch(open)?.group(1);
+      if (col != null) protoCells[col] = cell;
+    }
+  }
+  String styleOf(String col) {
+    final c = protoCells[col];
+    if (c == null) return '';
+    final open = RegExp(r'<c\b[^>]*?/?>').firstMatch(c)!.group(0)!;
+    final st = RegExp(r'\bs="(\d+)"').firstMatch(open)?.group(1);
+    return st == null ? '' : ' s="$st"';
+  }
+
+  final cols = <String>{...protoCells.keys, 'B', 'C', 'D', 'F'}.toList()
+    ..sort((a, b) => _colNum(a).compareTo(_colNum(b)));
+  final body = StringBuffer();
+  for (var i = 0; i < units.length; i++) {
+    final r = i + 2;
+    final u = units[i];
+    final open = proto == null
+        ? '<row r="$r"'
+        : rowOpen.replaceFirst(RegExp(r'\br="\d+"'), 'r="$r"');
+    body.write('$open>');
+    for (final col in cols) {
+      final st = styleOf(col);
+      switch (col) {
+        case 'B':
+          body.write('<c r="B$r"$st t="inlineStr"><is><t xml:space="preserve">${_xmlEsc(u.name)}</t></is></c>');
+          break;
+        case 'C':
+          body.write('<c r="C$r"$st><v>${u.count}</v></c>');
+          break;
+        case 'D':
+          body.write('<c r="D$r"$st><v>${_numStr(u.amount)}</v></c>');
+          break;
+        case 'E':
+          body.write('<c r="E$r"$st/>');
+          break;
+        case 'F':
+          body.write('<c r="F$r"$st><f>D$r+IF(ISBLANK(E$r),0,E$r)</f><v>${_numStr(u.amount)}</v></c>');
+          break;
+        default:
+          final c = protoCells[col];
+          if (c == null || c.contains('<f')) {
+            body.write('<c r="$col$r"$st/>');
+          } else {
+            body.write(c.replaceFirst(RegExp(r'\br="[A-Z]+\d+"'), 'r="$col$r"'));
+          }
+      }
+    }
+    body.write('</row>');
+  }
+  var out = xml.replaceRange(sd.start, sd.end, '<sheetData>${header.toString()}${body.toString()}</sheetData>');
+  final lastCol = cols.last;
+  out = out.replaceFirst(RegExp(r'<dimension\b[^>]*?/>'), '<dimension ref="A1:$lastCol${units.length + 1}"/>');
+  return out;
+}
+
+List<int> fillTemplate(List<int> bytes, List<_UnitOut> units) {
   final arc = ZipDecoder().decodeBytes(bytes);
   final sheetPath = _firstSheetPath(arc);
   final out = Archive();
   var found = false;
   for (final f in arc.files) {
     if (!f.isFile) continue;
+    if (f.name == 'xl/calcChain.xml') continue; // بيتعمل من جديد، وكان هيبوّظ الملف بعد تغيير الصفوف
     final c = f.content as List<int>;
     if (f.name == sheetPath) {
       found = true;
-      var xml = utf8.decode(c, allowMalformed: true);
-      for (var r = 2; r <= 11; r++) {
-        final tot = round2(totals[r] ?? 0.0);
-        xml = _setCell(xml, 'D', r, (ref, st, f0) =>
-            '<c r="$ref"${st != null ? ' s="$st"' : ''}><v>$tot</v></c>');
-        final cash = _readNum(xml, 'E', r);
-        final total = round2(tot + cash);
-        xml = _setCell(xml, 'F', r, (ref, st, f0) =>
-            '<c r="$ref"${st != null ? ' s="$st"' : ''}>'
-            '${f0 ?? '<f>D$r+IF(ISBLANK(E$r),0,E$r)</f>'}<v>$total</v></c>');
-      }
+      final xml = buildUnitsSheetXml(utf8.decode(c, allowMalformed: true), units);
       final b = utf8.encode(xml);
+      out.addFile(ArchiveFile(f.name, b.length, b));
+    } else if (f.name == '[Content_Types].xml' || f.name == 'xl/_rels/workbook.xml.rels') {
+      final t = utf8
+          .decode(c, allowMalformed: true)
+          .replaceAll(RegExp(r'<Override\b[^>]*calcChain[^>]*?/>'), '')
+          .replaceAll(RegExp(r'<Relationship\b[^>]*calcChain[^>]*?/>'), '');
+      final b = utf8.encode(t);
       out.addFile(ArchiveFile(f.name, b.length, b));
     } else {
       out.addFile(ArchiveFile(f.name, c.length, c));
@@ -3207,12 +3526,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 const SizedBox(height: 8),
                 DropdownButtonFormField<int>(
                   value: selectedOrder,
-                  hint: const Text('اختر الماكينة (1..19)'),
+                  hint: const Text('اختر الماكينة'),
                   items: [
-                    for (var i = 1; i <= 19; i++)
+                    for (final i in machineNums())
                       DropdownMenuItem(
                         value: i,
-                        child: Text('ماكينة $i - ${rowNames[terminals[numToTid[i]]!.excelRow]}'),
+                        child: Text(machineLabel(i)),
                       ),
                   ],
                   onChanged: (v) => setDlgState(() => selectedOrder = v),
@@ -3323,7 +3642,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     // حساب إجماليات كل وحدة
     final unitTotals = <int, double>{};
-    for (var r = 2; r <= 11; r++) {
+    for (final r in rowNames.keys) {
       unitTotals[r] = 0.0;
     }
     for (final item in mainItems) {
@@ -3340,7 +3659,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       xlsxLine = '⚠️ قالب "الاسكندريه 00.xlsx" مش موجود في فولدر all (ولا مضاف للتطبيق)، فمتعملش إكسيل.';
     } else {
       try {
-        final outBytes = fillTemplate(tpl, unitTotals);
+        final unitRows = rowNames.keys.toList()..sort();
+        final outBytes = fillTemplate(tpl, [
+          for (final r in unitRows)
+            _UnitOut(
+              rowNames[r] ?? 'وحدة $r',
+              terminals.values.where((t) => t.excelRow == r).length,
+              unitTotals[r] ?? 0.0,
+            ),
+        ]);
         final stdFile = File('$outputDir/الاسكندريه $reportDate.xlsx');
         stdFile.createSync(recursive: true);
         stdFile.writeAsBytesSync(outBytes);
@@ -3359,7 +3686,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final foundOrders =
         mainItems.where((e) => e.amount > 0).map((e) => e.orderNum).whereType<int>().toSet();
     missingTerminals = [
-      for (var i = 1; i <= 19; i++)
+      for (final i in machineNums())
         if (!foundOrders.contains(i) && !ignore.contains(i)) i
     ];
     writeReport(reportDate);
@@ -3484,6 +3811,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       setState(() => status = 'يجب منح إذن الوصول إلى جميع الملفات للمتابعة.');
       return;
     }
+    await loadSettingsFromExcel();
 
     setState(() {
       busy = true;
@@ -3835,7 +4163,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         continue;
       }
       final free = <int>[];
-      for (var n = 1; n <= 19; n++) {
+      for (final n in machineNums()) {
         if (terminals[numToTid[n]!]!.excelRow == r.row && !taken.containsKey(n)) {
           free.add(n);
         }
@@ -3974,7 +4302,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               } else if (v == 'out') {
                 useDefaultOut();
               } else if (v == 'settings') {
-                openFile(settingsPath, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                ensureSettingsFile().then((ok) {
+                  if (!mounted) return;
+                  if (ok) {
+                    openFile(settingsPath, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('مقدرتش أعمل ملف الإعدادات. اتأكد من إذن الوصول لكل الملفات.')),
+                    );
+                  }
+                });
               } else if (v == 'clear') {
                 clearAll();
               }
@@ -4065,7 +4402,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '⚠️ ماكينات ناقصة (${missingTerminals.length} من 19):',
+                    '⚠️ ماكينات ناقصة (${missingTerminals.length} من ${terminals.length}):',
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: _tintFg(context, Colors.amber),
@@ -4074,7 +4411,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   const SizedBox(height: 4),
                   Text(
                     missingTerminals
-                        .map((n) => '$n (${rowNames[terminals[numToTid[n]]!.excelRow]})')
+                        .map((n) => '$n (${terminals[numToTid[n]]?.unitName ?? ''})')
                         .join(' ، '),
                     style: const TextStyle(fontSize: 13),
                   ),
@@ -4692,12 +5029,12 @@ class _ReviewPageState extends State<ReviewPage> {
           DropdownButtonFormField<int>(
             value: order,
             isExpanded: true,
-            hint: const Text('اختر الماكينة (1..19)'),
+            hint: const Text('اختر الماكينة'),
             items: [
-              for (var i = 1; i <= 19; i++)
+              for (final i in machineNums())
                 DropdownMenuItem(
                   value: i,
-                  child: Text('ماكينة $i - ${rowNames[terminals[numToTid[i]]!.excelRow]}'),
+                  child: Text(machineLabel(i)),
                 ),
             ],
             onChanged: (v) => setState(() => order = v),
@@ -4812,7 +5149,7 @@ void savePdfDir(String? f) {
   _writeCfg(m);
 }
 
-// الاسم الجديد: "1.أبيس.1.يوم.4.11" (وحدة فيها أكتر من ماكينة) أو "17.مديرية.الأمن.يوم.4.11"
+// الاسم الجديد: "1.اسم.الوحدة.1.يوم.4.11" (وحدة فيها أكتر من ماكينة) أو "17.اسم.الوحدة.يوم.4.11"
 String machineNewName(TerminalInfo info, String day, String month) {
   final same = terminals.values.where((t) => t.excelRow == info.excelRow).toList()
     ..sort((a, b) => a.orderNum.compareTo(b.orderNum));
@@ -4934,7 +5271,7 @@ class MCollector {
     }
     r.tid = tc.isNotEmpty
         ? tc.entries.reduce((a, b) => a.value >= b.value ? a : b).key
-        : findTerminalIn([all]);
+        : (findTerminalIn([all]) ?? discoverTerminal([all]));
 
     // اليوم الأغلب + الإيصالات اللي مش تبع نفس اليوم
     if (days.isEmpty) {
@@ -5180,7 +5517,7 @@ MIdent _identify(String all) {
   }
   r.tid = tc.isNotEmpty
       ? tc.entries.reduce((a, b) => a.value >= b.value ? a : b).key
-      : findTerminalIn([all]);
+      : (findTerminalIn([all]) ?? discoverTerminal([all]));
   final days = <String, int>{};
   for (final m in _dateRe.allMatches(all)) {
     final k = _dayKey(m.group(0)!);
@@ -6088,7 +6425,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     if (busy) return;
     int? guess = r.orderNum;
     guess ??= int.tryParse(RegExp(r'^\s*(\d{1,2})').firstMatch(r.pdfName)?.group(1) ?? '');
-    if (guess != null && (guess < 1 || guess > 19)) guess = null;
+    if (guess != null && !numToTid.containsKey(guess)) guess = null;
     int? sel = guess;
     final picked = await showDialog<int>(
       context: context,
@@ -6100,10 +6437,10 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
             value: sel,
             hint: const Text('اختار الماكينة'),
             items: [
-              for (var i = 1; i <= 19; i++)
+              for (final i in machineNums())
                 DropdownMenuItem(
                   value: i,
-                  child: Text('ماكينة $i - ${terminals[numToTid[i]]?.unitName ?? ''}'),
+                  child: Text(machineLabel(i)),
                 ),
             ],
             onChanged: (v) => setS(() => sel = v),
@@ -6262,6 +6599,8 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   }
 
   Future<void> _run(bool resumeOnly, bool count, {List<String>? manualPaths}) async {
+    await ensureDefaultFiles();
+    await loadSettingsFromExcel();
     setState(() {
       busy = true;
       stopReq = false;
@@ -6826,7 +7165,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   List<String> missingMachines() {
     final got = results.where((r) => !r.excluded).map((r) => r.orderNum).whereType<int>().toSet();
     final out = <String>[];
-    for (var n = 1; n <= 19; n++) {
+    for (final n in machineNums()) {
       if (!got.contains(n)) out.add('$n ${terminals[numToTid[n]]!.unitName}');
     }
     return out;
@@ -6926,7 +7265,16 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                 toggleFastCount();
                 setState(() {});
               } else if (v == 'settings') {
-                openFile(settingsPath, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                ensureSettingsFile().then((ok) {
+                  if (!mounted) return;
+                  if (ok) {
+                    openFile(settingsPath, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('مقدرتش أعمل ملف الإعدادات. اتأكد من إذن الوصول لكل الملفات.')),
+                    );
+                  }
+                });
               } else if (v == 'clear') {
                 clearAll();
               }
