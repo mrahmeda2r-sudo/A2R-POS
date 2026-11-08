@@ -22,10 +22,7 @@ import 'package:excel/excel.dart' as ex;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await appSettings.load();
-  try {
-    if (await Permission.manageExternalStorage.isGranted) await ensureDefaultFiles();
-  } catch (_) {}
-  await loadSettingsFromExcel();
+  await prepareDefaultFiles();
   FlutterError.onError = (d) {
     _dbg('FLUTTER_ERROR ${d.exceptionAsString()}');
     FlutterError.presentError(d);
@@ -37,7 +34,7 @@ Future<void> main() async {
   runApp(const PosApp());
 }
 
-// بيختار DPI بحيث الضلع الأطول ما يزيدش عن ~2500 بكسل (PDF الممسوح بيبقى مقاسه كبير وبيخلّي الذاكرة تخلص)
+// ط¨ظٹط®طھط§ط± DPI ط¨ط­ظٹط« ط§ظ„ط¶ظ„ط¹ ط§ظ„ط£ط·ظˆظ„ ظ…ط§ ظٹط²ظٹط¯ط´ ط¹ظ† ~2500 ط¨ظƒط³ظ„ (PDF ط§ظ„ظ…ظ…ط³ظˆط­ ط¨ظٹط¨ظ‚ظ‰ ظ…ظ‚ط§ط³ظ‡ ظƒط¨ظٹط± ظˆط¨ظٹط®ظ„ظ‘ظٹ ط§ظ„ط°ط§ظƒط±ط© طھط®ظ„طµ)
 Future<double> _safeDpi(Uint8List bytes, int pageIdx, double wanted) async {
   try {
     await for (final p in Printing.raster(bytes, pages: [pageIdx], dpi: 72)) {
@@ -61,7 +58,7 @@ bool _hasPdfHeader(File f) {
   }
 }
 
-// تاريخ إيصال في المستقبل = قراءة غلط
+// طھط§ط±ظٹط® ط¥ظٹطµط§ظ„ ظپظٹ ط§ظ„ظ…ط³طھظ‚ط¨ظ„ = ظ‚ط±ط§ط،ط© ط؛ظ„ط·
 bool _plausibleDay(String? d, String? m) {
   if (d == null || m == null) return true;
   final di = int.tryParse(d), mi = int.tryParse(m);
@@ -73,7 +70,7 @@ bool _plausibleDay(String? d, String? m) {
 
 bool _pageEnd(Object e) => e.toString().contains('Invalid page index');
 
-// سجل تشخيصي بيتكتب في id_debug.txt (بيساعد نعرف ليه ملف اتخطّى أو التطبيق خرج)
+// ط³ط¬ظ„ طھط´ط®ظٹطµظٹ ط¨ظٹطھظƒطھط¨ ظپظٹ id_debug.txt (ط¨ظٹط³ط§ط¹ط¯ ظ†ط¹ط±ظپ ظ„ظٹظ‡ ظ…ظ„ظپ ط§طھط®ط·ظ‘ظ‰ ط£ظˆ ط§ظ„طھط·ط¨ظٹظ‚ ط®ط±ط¬)
 void _dbg(String m) {
   try {
     final t = DateTime.now().toIso8601String().substring(11, 19);
@@ -81,12 +78,17 @@ void _dbg(String m) {
   } catch (_) {}
 }
 
-// ملف التقفيل اللي التطبيق نفسه بيطلّعه (الاسكندريه 5.11.pdf) بس، مش أي اسم بيبدأ بـ "الاسكندريه"
+// ظ…ظ„ظپ ط§ظ„ظ†طھظٹط¬ط© ط§ظ„ظ„ظٹ ط§ظ„طھط·ط¨ظٹظ‚ ظ†ظپط³ظ‡ ط¨ظٹط·ظ„ظ‘ط¹ظ‡ (ظ†طھظٹط¬ط© 5.11.pdf) ط¨ط³طŒ ظ…ط´ ط£ظٹ ط§ط³ظ… طھط§ظ†ظٹ
 bool _isAppReportName(String n) => RegExp(
-        r'^الاسكندريه\s*(\d{1,2}[.\-_]\d{1,2}|اليوم)(\s*\(\d+\))?\.pdf$')
+        r'^(ظ†طھظٹط¬ظ‡|ظ†ط§طھط¬|ط§ظ„ط§ط³ظƒظ†ط¯ط±ظٹظ‡)\s*(\d{1,2}[.\-_]\d{1,2}|ط§ظ„ظٹظˆظ…)(\s*\(\d+\))?\.pdf$')
     .hasMatch(_normAr(n));
 
-// ───────── عناصر واجهة مدمجة (علشان الشاشة ما تبقاش زحمة) ─────────
+// ط£ظٹ ظ…ظ„ظپ ط¥ط®ط±ط§ط¬ ط·ظ„ظ‘ط¹ظ‡ ط§ظ„طھط·ط¨ظٹظ‚ (ط¥ظƒط³ظٹظ„ ط£ظˆ PDF): "ظ†طھظٹط¬ط© 5.11.xlsx" (ظˆط§ظ„ط§ط³ظ… ط§ظ„ظ‚ط¯ظٹظ… ظ„ط³ظ‡ ظ…طھط¹ط±ظ‘ظپ ط¹ظ„ظٹظ‡)
+bool _isOutputFileName(String n) => RegExp(
+        r'^(ظ†طھظٹط¬ظ‡|ظ†ط§طھط¬|ط§ظ„ط§ط³ظƒظ†ط¯ط±ظٹظ‡)\s*(\d{1,2}[.\-_]\d{1,2}|ط§ظ„ظٹظˆظ…)(\s*\(\d+\))?\.(pdf|xlsx)$')
+    .hasMatch(_normAr(n));
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط¹ظ†ط§طµط± ظˆط§ط¬ظ‡ط© ظ…ط¯ظ…ط¬ط© (ط¹ظ„ط´ط§ظ† ط§ظ„ط´ط§ط´ط© ظ…ط§ طھط¨ظ‚ط§ط´ ط²ط­ظ…ط©) â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Widget _mini(IconData icon, String label, VoidCallback? onPressed, {bool filled = false}) {
   const pad = WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12));
   const size = WidgetStatePropertyAll(Size(0, 36));
@@ -106,17 +108,17 @@ Widget _mini(IconData icon, String label, VoidCallback? onPressed, {bool filled 
 
 Widget _periodRow(int days, bool busy, void Function(int) onPick) => Row(
       children: [
-        const Text('الفترة', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+        const Text('ط§ظ„ظپطھط±ط©', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
         const SizedBox(width: 10),
         Expanded(
           child: Wrap(
             spacing: 6,
             children: [
               for (final o in const [
-                [0, 'اليوم'],
-                [1, 'يومين'],
-                [2, '3 أيام'],
-                [-1, 'الكل'],
+                [0, 'ط§ظ„ظٹظˆظ…'],
+                [1, 'ظٹظˆظ…ظٹظ†'],
+                [2, '3 ط£ظٹط§ظ…'],
+                [-1, 'ط§ظ„ظƒظ„'],
               ])
                 ChoiceChip(
                   label: Text(o[1] as String, style: const TextStyle(fontSize: 13)),
@@ -133,21 +135,21 @@ Widget _periodRow(int days, bool busy, void Function(int) onPick) => Row(
 
 Widget _filterRow(bool reviewOnly, int all, int review, void Function(bool) onPick) => Row(
       children: [
-        const Text('عرض', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+        const Text('ط¹ط±ط¶', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
         const SizedBox(width: 10),
         Expanded(
           child: Wrap(
             spacing: 6,
             children: [
               ChoiceChip(
-                label: Text('الكل ($all)', style: const TextStyle(fontSize: 13)),
+                label: Text('ط§ظ„ظƒظ„ ($all)', style: const TextStyle(fontSize: 13)),
                 visualDensity: VisualDensity.compact,
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 selected: !reviewOnly,
                 onSelected: (_) => onPick(false),
               ),
               ChoiceChip(
-                label: Text('مراجعة ($review)', style: const TextStyle(fontSize: 13)),
+                label: Text('ظ…ط±ط§ط¬ط¹ط© ($review)', style: const TextStyle(fontSize: 13)),
                 visualDensity: VisualDensity.compact,
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 selected: reviewOnly,
@@ -169,7 +171,7 @@ Widget _pathRow(IconData icon, String label, String path, VoidCallback? onPick,
   );
   return GestureDetector(
     behavior: HitTestBehavior.opaque,
-    onLongPress: onReset, // ضغطة مطوّلة = رجوع للافتراضي
+    onLongPress: onReset, // ط¶ط؛ط·ط© ظ…ط·ظˆظ‘ظ„ط© = ط±ط¬ظˆط¹ ظ„ظ„ط§ظپطھط±ط§ط¶ظٹ
     child: Row(
       children: [
         Icon(icon, size: 18),
@@ -190,7 +192,7 @@ Widget _pathRow(IconData icon, String label, String path, VoidCallback? onPick,
             ],
           ),
         ),
-        TextButton(onPressed: onPick, style: bs, child: const Text('تغيير')),
+        TextButton(onPressed: onPick, style: bs, child: const Text('طھط؛ظٹظٹط±')),
       ],
     ),
   );
@@ -242,8 +244,8 @@ Widget _bottomBar(Widget button, {bool busy = false, double? progress}) => Mater
       ),
     );
 
-// رقم الإصدار: بييجي من GitHub Actions وقت البناء (APP_VERSION + رقم البناء)
-const String kAppVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'تجريبي');
+// ط±ظ‚ظ… ط§ظ„ط¥طµط¯ط§ط±: ط¨ظٹظٹط¬ظٹ ظ…ظ† GitHub Actions ظˆظ‚طھ ط§ظ„ط¨ظ†ط§ط، (APP_VERSION + ط±ظ‚ظ… ط§ظ„ط¨ظ†ط§ط،)
+const String kAppVersion = String.fromEnvironment('APP_VERSION', defaultValue: 'طھط¬ط±ظٹط¨ظٹ');
 
 
 String _cellText(ex.Data? d) {
@@ -259,7 +261,7 @@ int? _cellInt(ex.Data? d) {
   return int.tryParse(t) ?? double.tryParse(t)?.toInt();
 }
 
-// بيقرا ملف الإعدادات (الماكينات / كلمات الوحدات / أكواد التاجر / تصحيح الأرقام). لو مفيش ملف الإعدادات فاضية.
+// ط¨ظٹظ‚ط±ط§ ظ…ظ„ظپ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ (ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ / ظƒظ„ظ…ط§طھ ط§ظ„ظˆط­ط¯ط§طھ / ط£ظƒظˆط§ط¯ ط§ظ„طھط§ط¬ط± / طھطµط­ظٹط­ ط§ظ„ط£ط±ظ‚ط§ظ…). ظ„ظˆ ظ…ظپظٹط´ ظ…ظ„ظپ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ ظپط§ط¶ظٹط©.
 Future<void> loadSettingsFromExcel() async {
   try {
     final f = File(settingsPath);
@@ -287,7 +289,7 @@ Future<void> loadSettingsFromExcel() async {
       final xlRow = _cellInt(r[2]);
       var name = r.length > 3 ? _cellText(r[3]) : '';
       if (order == null || tid.isEmpty || xlRow == null) continue;
-      if (name.isEmpty) name = 'وحدة $xlRow';
+      if (name.isEmpty) name = 'ظˆط­ط¯ط© $xlRow';
       newTerms[tid] = TerminalInfo(order, xlRow, name);
     }
 
@@ -296,7 +298,7 @@ Future<void> loadSettingsFromExcel() async {
       if (r.length < 2) continue;
       final row = _cellInt(r[0]);
       final kws = _cellText(r[1])
-          .split(RegExp(r'[,;،|]'))
+          .split(RegExp(r'[,;طŒ|]'))
           .map((e) => e.trim().toUpperCase())
           .where((e) => e.isNotEmpty)
           .toList();
@@ -337,7 +339,7 @@ Future<void> loadSettingsFromExcel() async {
   }
 }
 
-// بيكتب الماكينات والوحدات اللي اتعرفت (من الإيصالات أو من الملف) في ملف الإعدادات
+// ط¨ظٹظƒطھط¨ ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ ظˆط§ظ„ظˆط­ط¯ط§طھ ط§ظ„ظ„ظٹ ط§طھط¹ط±ظپطھ (ظ…ظ† ط§ظ„ط¥ظٹطµط§ظ„ط§طھ ط£ظˆ ظ…ظ† ط§ظ„ظ…ظ„ظپ) ظپظٹ ظ…ظ„ظپ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ
 bool saveSettingsToExcel() {
   try {
     final f = File(settingsPath);
@@ -383,7 +385,37 @@ bool saveSettingsToExcel() {
   }
 }
 
-// أول مرة: بينسخ ملفي الإعدادات والقالب (المرفوعين مع المشروع) لمجلد التطبيق لو مش موجودين
+// ظ‚ط§ظ„ط¨ ط´ظٹطھ ط§ظ„ظ†طھظٹط¬ط© ط§ظ„ظپط§ط¶ظٹ (ط¹ظ†ط§ظˆظٹظ† ط¨ط³) ظ„ظˆ ظ…ظپظٹط´ ظ‚ط§ظ„ط¨ ظ…ط¶ط§ظپ ظ„ظ„طھط·ط¨ظٹظ‚ ظˆظ„ط§ ظپظٹ ط§ظ„ظپظˆظ„ط¯ط±
+List<int>? _blankTemplateBytes() {
+  try {
+    final e = ex.Excel.createExcel();
+    final name = e.getDefaultSheet() ?? 'Sheet1';
+    e.appendRow(name, <ex.CellValue?>[
+      null,
+      ex.TextCellValue('ط§ظ„ظˆط­ط¯ط©'),
+      ex.TextCellValue('ط¹ط¯ط¯ ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ'),
+      ex.TextCellValue('ط§ظ„ظ…ط¨ظ„ط؛'),
+      ex.TextCellValue('ظƒط§ط´'),
+      ex.TextCellValue('ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ'),
+    ]);
+    return e.save();
+  } catch (_) {
+    return null;
+  }
+}
+
+// ط¨ظٹطھظ†ط¯ظ‡ ط£ظˆظ„ ظ…ط§ ط§ظ„طھط·ط¨ظٹظ‚ ظٹظپطھط­ (ظˆظ„ظ…ط§ ظٹط±ط¬ط¹ ظ…ظ† ط´ط§ط´ط© ط§ظ„ط¥ط°ظ†): ط¨ظٹظ†ط²ظ‘ظ„ ط´ظٹطھ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ ظˆط´ظٹطھ ط§ظ„ظ†طھظٹط¬ط© طھظ„ظ‚ط§ط¦ظٹ ظˆظٹط­ظ…ظ‘ظ„ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ
+Future<void> prepareDefaultFiles() async {
+  try {
+    if (await Permission.manageExternalStorage.isGranted) {
+      await ensureDefaultFiles();
+      await ensureSettingsFile();
+    }
+  } catch (_) {}
+  await loadSettingsFromExcel();
+}
+
+// ط£ظˆظ„ ظ…ط±ط©: ط¨ظٹظ†ط³ط® ظ…ظ„ظپظٹ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ ظˆط§ظ„ظ‚ط§ظ„ط¨ (ط§ظ„ظ…ط±ظپظˆط¹ظٹظ† ظ…ط¹ ط§ظ„ظ…ط´ط±ظˆط¹) ظ„ظ…ط¬ظ„ط¯ ط§ظ„طھط·ط¨ظٹظ‚ ظ„ظˆ ظ…ط´ ظ…ظˆط¬ظˆط¯ظٹظ†
 Future<void> ensureDefaultFiles() async {
   try {
     Directory(baseDir).createSync(recursive: true);
@@ -399,14 +431,21 @@ Future<void> ensureDefaultFiles() async {
       try {
         final d = await rootBundle.load('assets/template.xlsx');
         tp.writeAsBytesSync(d.buffer.asUint8List());
-      } catch (_) {}
+      } catch (_) {
+        final b = _blankTemplateBytes();
+        if (b != null) {
+          try {
+            tp.writeAsBytesSync(b);
+          } catch (_) {}
+        }
+      }
     }
   } catch (e) {
     _dbg('default files error: $e');
   }
 }
 
-// بيعمل ملف الإعدادات فاضي (بالعناوين بس) لو مش موجود، عشان المستخدم يملاه
+// ط¨ظٹط¹ظ…ظ„ ظ…ظ„ظپ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ ظپط§ط¶ظٹ (ط¨ط§ظ„ط¹ظ†ط§ظˆظٹظ† ط¨ط³) ظ„ظˆ ظ…ط´ ظ…ظˆط¬ظˆط¯طŒ ط¹ط´ط§ظ† ط§ظ„ظ…ط³طھط®ط¯ظ… ظٹظ…ظ„ط§ظ‡
 Future<bool> ensureSettingsFile() async {
   try {
     await ensureDefaultFiles();
@@ -425,10 +464,10 @@ Future<bool> ensureSettingsFile() async {
     addSheet('Merchant_Codes', ['Merchant_Code|Row']);
     addSheet('TID_Fixes', ['Wrong_TID|Correct_TID']);
     addSheet('README', [
-      'Terminals: Order = رقم الماكينة (1,2,3...) | TID = رقم الترمنل المكتوب على الإيصال | Row = رقم صف الوحدة في ملف الإكسيل | Unit_Name = اسم الوحدة',
-      'Name_Hints: كلمات (بالإنجليزي، مفصولة بفاصلة) لو ظهرت في الإيصال تتعرف الوحدة',
-      'Merchant_Codes: كود التاجر -> رقم الصف',
-      'TID_Fixes: رقم ترمنل بتقرأه OCR غلط -> الرقم الصح',
+      'Terminals: Order = ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط© (1,2,3...) | TID = ط±ظ‚ظ… ط§ظ„طھط±ظ…ظ†ظ„ ط§ظ„ظ…ظƒطھظˆط¨ ط¹ظ„ظ‰ ط§ظ„ط¥ظٹطµط§ظ„ | Row = ط±ظ‚ظ… طµظپ ط§ظ„ظˆط­ط¯ط© ظپظٹ ظ…ظ„ظپ ط§ظ„ط¥ظƒط³ظٹظ„ | Unit_Name = ط§ط³ظ… ط§ظ„ظˆط­ط¯ط©',
+      'Name_Hints: ظƒظ„ظ…ط§طھ (ط¨ط§ظ„ط¥ظ†ط¬ظ„ظٹط²ظٹطŒ ظ…ظپطµظˆظ„ط© ط¨ظپط§طµظ„ط©) ظ„ظˆ ط¸ظ‡ط±طھ ظپظٹ ط§ظ„ط¥ظٹطµط§ظ„ طھطھط¹ط±ظپ ط§ظ„ظˆط­ط¯ط©',
+      'Merchant_Codes: ظƒظˆط¯ ط§ظ„طھط§ط¬ط± -> ط±ظ‚ظ… ط§ظ„طµظپ',
+      'TID_Fixes: ط±ظ‚ظ… طھط±ظ…ظ†ظ„ ط¨طھظ‚ط±ط£ظ‡ OCR ط؛ظ„ط· -> ط§ظ„ط±ظ‚ظ… ط§ظ„طµط­',
     ]);
     try {
       excel.delete('Sheet1');
@@ -500,11 +539,11 @@ class _RootPageState extends State<RootPage> {
         destinations: [
           NavigationDestination(
             icon: _badged(homeBadge, Icons.receipt_long),
-            label: tr('التقفيل'),
+            label: tr('ط§ظ„طھظ‚ظپظٹظ„'),
           ),
           NavigationDestination(
             icon: _badged(machBadge, Icons.folder_copy),
-            label: tr('إيصالات الدفع'),
+            label: tr('ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹'),
           ),
         ],
       ),
@@ -515,10 +554,10 @@ class _RootPageState extends State<RootPage> {
 const String kAppName = 'A2R POS Public';
 const String kAppAuthor = 'Ahmed Ramadan - Alexandria';
 
-// ───────────────────── الإعدادات: اللغة + الدارك مود ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ: ط§ظ„ظ„ط؛ط© + ط§ظ„ط¯ط§ط±ظƒ ظ…ظˆط¯ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class AppSettings extends ChangeNotifier with WidgetsBindingObserver {
-  ThemeMode themeMode = ThemeMode.system; // system = حسب النظام
-  String? langCode; // null = حسب لغة النظام
+  ThemeMode themeMode = ThemeMode.system; // system = ط­ط³ط¨ ط§ظ„ظ†ط¸ط§ظ…
+  String? langCode; // null = ط­ط³ط¨ ظ„ط؛ط© ط§ظ„ظ†ط¸ط§ظ…
   int seedIndex = kDefaultSeed;
   SharedPreferences? _prefs;
 
@@ -543,7 +582,7 @@ class AppSettings extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeLocales(List<Locale>? locales) {
-    if (langCode == null) notifyListeners(); // بنتبع لغة النظام
+    if (langCode == null) notifyListeners(); // ط¨ظ†طھط¨ط¹ ظ„ط؛ط© ط§ظ„ظ†ط¸ط§ظ…
   }
 
   void setLang(String? code) {
@@ -590,7 +629,7 @@ class AppSettings extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  // أي ويدجت بتنده عليها بتتسجّل وبتتحدّث لوحدها لما اللغة تتغير
+  // ط£ظٹ ظˆظٹط¯ط¬طھ ط¨طھظ†ط¯ظ‡ ط¹ظ„ظٹظ‡ط§ ط¨طھطھط³ط¬ظ‘ظ„ ظˆط¨طھطھط­ط¯ظ‘ط« ظ„ظˆط­ط¯ظ‡ط§ ظ„ظ…ط§ ط§ظ„ظ„ط؛ط© طھطھط؛ظٹط±
   static AppSettings of(BuildContext context) {
     final s = context.dependOnInheritedWidgetOfExactType<_LangScope>();
     return s?.notifier ?? appSettings;
@@ -599,17 +638,204 @@ class AppSettings extends ChangeNotifier with WidgetsBindingObserver {
 
 final AppSettings appSettings = AppSettings();
 
-// لون هوية التطبيق (A2R): أزرق ملكي. بيتضاف في آخر القايمة علشان اللي اختار لون قبل كده يفضل لونه.
+// ظ„ظˆظ† ظ‡ظˆظٹط© ط§ظ„طھط·ط¨ظٹظ‚ (A2R): ط£ط²ط±ظ‚ ظ…ظ„ظƒظٹ. ط¨ظٹطھط¶ط§ظپ ظپظٹ ط¢ط®ط± ط§ظ„ظ‚ط§ظٹظ…ط© ط¹ظ„ط´ط§ظ† ط§ظ„ظ„ظٹ ط§ط®طھط§ط± ظ„ظˆظ† ظ‚ط¨ظ„ ظƒط¯ظ‡ ظٹظپط¶ظ„ ظ„ظˆظ†ظ‡.
 const Color kBrandSeed = Color(0xFF2B59C3);
-const int kDefaultSeed = 6; // مكان kBrandSeed في kSeeds
+const int kDefaultSeed = 6; // ظ…ظƒط§ظ† kBrandSeed ظپظٹ kSeeds
 const List<Color> kSeeds = [Colors.teal, Colors.blue, Colors.indigo, Colors.green, Colors.orange, Colors.purple, kBrandSeed];
-const List<String> kSeedNamesAr = ['تيل', 'أزرق', 'نيلي', 'أخضر', 'برتقالي', 'بنفسجي', 'A2R (الهوية)'];
+const List<String> kSeedNamesAr = ['طھظٹظ„', 'ط£ط²ط±ظ‚', 'ظ†ظٹظ„ظٹ', 'ط£ط®ط¶ط±', 'ط¨ط±طھظ‚ط§ظ„ظٹ', 'ط¨ظ†ظپط³ط¬ظٹ', 'A2R (ط§ظ„ظ‡ظˆظٹط©)'];
 const List<String> kSeedNamesEn = ['Teal', 'Blue', 'Indigo', 'Green', 'Orange', 'Purple', 'A2R (brand)'];
 
-// ───────── حالة مشتركة بين التابين ─────────
-final ValueNotifier<int> sharedDays = ValueNotifier<int>(0); // الفترة (اليوم/يومين/...) واحدة للتابين
-final ValueNotifier<int> homeBadge = ValueNotifier<int>(0); // عدد اللي محتاج مراجعة في التقفيل
-final ValueNotifier<int> machBadge = ValueNotifier<int>(0); // عدد اللي محتاج مراجعة في إيصالات الدفع
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط­ط§ظ„ط© ظ…ط´طھط±ظƒط© ط¨ظٹظ† ط§ظ„طھط§ط¨ظٹظ† â”€â”€â”€â”€â”€â”€â”€â”€â”€
+final ValueNotifier<Map<int, int>> closingTxn = ValueNotifier<Map<int, int>>(<int, int>{}); // ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط© -> ط¹ط¯ط¯ ظ…ط¹ط§ظ…ظ„ط§طھ ط§ظ„ط¨ط§طھط´
+final ValueNotifier<int> wipeSignal = ValueNotifier<int>(0); // ط¨ظٹطھط؛ظٹط± ظ„ظ…ط§ "ظ…ط³ط­ ظƒظ„ ط­ط§ط¬ط©" ظٹط®ظ„طµ
+bool homeBusyG = false;
+bool machBusyG = false;
+
+void _publishClosing(List<ReceiptItem> items) {
+  final sums = <int, int>{};
+  final bad = <int>{};
+  for (final it in items) {
+    if (!it.counts) continue;
+    final n = it.orderNum ?? (it.tid != null ? terminals[it.tid]?.orderNum : null);
+    if (n == null) continue;
+    final t = it.txn;
+    if (t == null) {
+      bad.add(n);
+      continue;
+    }
+    sums[n] = (sums[n] ?? 0) + t;
+  }
+  for (final n in bad) {
+    sums.remove(n);
+  }
+  final cur = closingTxn.value;
+  var same = cur.length == sums.length;
+  if (same) {
+    for (final e in sums.entries) {
+      if (cur[e.key] != e.value) {
+        same = false;
+        break;
+      }
+    }
+  }
+  if (same) return;
+  WidgetsBinding.instance.addPostFrameCallback((_) => closingTxn.value = sums);
+}
+
+// طھط£ظƒظٹط¯ ظ‚ط¨ظ„ ط§ظ„ط¥ط±ط³ط§ظ„ ظ„ظˆ ظپظٹظ‡ ط­ط§ط¬ط§طھ ظ„ط³ظ‡ ظ…ظپطھظˆط­ط©
+Future<bool> confirmSend(BuildContext context, {int review = 0, int missing = 0, int pending = 0}) async {
+  if (review == 0 && missing == 0 && pending == 0) return true;
+  final ar = AppSettings.of(context).isAr;
+  final lines = <String>[
+    if (review > 0) (ar ? 'â€¢ $review ظ…ط­طھط§ط¬ ظ…ط±ط§ط¬ط¹ط©' : 'â€¢ $review need review'),
+    if (missing > 0) (ar ? 'â€¢ $missing ظ…ط§ظƒظٹظ†ط© ظ†ط§ظ‚طµط©' : 'â€¢ $missing missing machine(s)'),
+    if (pending > 0) (ar ? 'â€¢ $pending ظ„ط³ظ‡ ظ…ط§ ط§طھط¹ط¯ظ‘ط´' : 'â€¢ $pending not counted yet'),
+  ];
+  final r = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: w.Text(ar ? 'ظ„ط³ظ‡ ظپظٹظ‡ ط­ط§ط¬ط§طھ ظ…ظپطھظˆط­ط©' : 'Some things are still open'),
+      content: w.Text('${lines.join('\n')}\n\n${ar ? 'طھط¨ط¹طھ ط¨ط±ط¶ظ‡طں' : 'Send anyway?'}'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: w.Text(ar ? 'ط±ط¬ظˆط¹' : 'Back')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: w.Text(ar ? 'ط§ط¨ط¹طھ ط¨ط±ط¶ظ‡' : 'Send anyway')),
+      ],
+    ),
+  );
+  return r == true;
+}
+
+// ظ…ط³ط­ ظƒظ„ ط­ط§ط¬ط©: ظ…ظ„ظپط§طھ ط§ظ„ط¥ط®ط±ط§ط¬ + ط§ظ„طµظˆط± + ظ†طھط§ظٹط¬ ط§ظ„ظپط­طµ + ط§ظ„طھطµط­ظٹط­ط§طھ + ط§ظ„ظ„ظˆط¬ + ط§ظ„ظƒط§ط´ ظˆط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ظ…ط¤ظ‚طھط© (ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ ظˆط§ظ„ظ„ط؛ط© ظˆط§ظ„ط«ظٹظ… ط¨ظٹظپط¶ظ„ظˆط§)
+Future<void> wipeEverything(BuildContext context) async {
+  final ar = AppSettings.of(context).isAr;
+  final m = ScaffoldMessenger.of(context);
+  if (homeBusyG || machBusyG) {
+    m.showSnackBar(SnackBar(
+        content: w.Text(ar ? 'ط§ط³طھظ†ظ‰ ظ„ط­ط¯ ظ…ط§ ط§ظ„ظ…ط¹ط§ظ„ط¬ط© طھط®ظ„طµ ط£ظˆ ظˆظ‚ظ‘ظپظ‡ط§ ط§ظ„ط£ظˆظ„.' : 'Wait for processing to finish or stop it first.')));
+    return;
+  }
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: w.Text(ar ? 'ظ…ط³ط­ ظƒظ„ ط­ط§ط¬ط©طں' : 'Wipe everything?'),
+      content: w.Text(ar
+          ? 'ظ‡ظٹطھظ…ط³ط­ ظ†ظ‡ط§ط¦ظٹ:\nâ€¢ ظ…ظ„ظپط§طھ ط§ظ„ط¥ط®ط±ط§ط¬ (ط§ظ„ط¥ظƒط³ظٹظ„ ظˆط§ظ„ظ€ PDF)\nâ€¢ ط§ظ„طµظˆط± ط§ظ„ظ…ط±طھط¨ط© ظˆط§ظ„ظ†ط³ط® ط§ظ„ظ…طھط³ظ…ظٹط© ظ„ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹\nâ€¢ ظ†طھط§ظٹط¬ ط§ظ„ظپط­طµ ظˆط§ظ„طھطµط­ظٹط­ط§طھ ط§ظ„ظ…ط­ظپظˆط¸ط©\nâ€¢ ط§ظ„ظ„ظˆط¬\nâ€¢ ط§ظ„ظƒط§ط´ ظˆط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ظ…ط¤ظ‚طھط©\n\nظ…ط´ ظ‡ظٹطھظ…ط³: ظ…ظ„ظپط§طھ ظˆط§طھط³ط§ط¨ ط§ظ„ط£طµظ„ظٹط©طŒ ظˆط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ (ط§ظ„ظ„ط؛ط© ظˆط§ظ„ط«ظٹظ… ظˆط§ظ„ظپظˆظ„ط¯ط±ط§طھ).'
+          : 'This will permanently delete:\nâ€¢ Output files (Excel and PDF)\nâ€¢ Sorted images and renamed payment receipt copies\nâ€¢ Scan results and saved corrections\nâ€¢ The log\nâ€¢ Cache and temporary files\n\nNot touched: original WhatsApp files and settings (language, theme, folders).'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: w.Text(ar ? 'ط¥ظ„ط؛ط§ط،' : 'Cancel')),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: Colors.red),
+          onPressed: () => Navigator.pop(ctx, true),
+          child: w.Text(ar ? 'ط§ظ…ط³ط­ ظƒظ„ ط­ط§ط¬ط©' : 'Wipe everything'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+
+  var files = 0;
+  var bytes = 0;
+  bool delFile(File f) {
+    try {
+      bytes += f.lengthSync();
+      f.deleteSync();
+      files++;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void wipeTree(String path) {
+    try {
+      final d = Directory(path);
+      if (!d.existsSync()) return;
+      for (final e in d.listSync(recursive: true, followLinks: false)) {
+        if (e is File) delFile(e);
+      }
+      try {
+        d.deleteSync(recursive: true);
+      } catch (_) {}
+    } catch (_) {}
+  }
+
+  void wipeFlat(String path, bool Function(File) only) {
+    try {
+      final d = Directory(path);
+      if (!d.existsSync()) return;
+      for (final e in d.listSync(followLinks: false)) {
+        if (e is File && only(e)) delFile(e);
+      }
+    } catch (_) {}
+  }
+
+  bool appOut(File f) {
+    final n = baseName(f.path);
+    final l = n.toLowerCase();
+    return n == 'review_report.txt' ||
+        n == 'ocr_debug.txt' ||
+        _isOutputFileName(n);
+  }
+
+  final protectedDirs = <String>{root, baseDir, '$root/Download', '$root/Documents', '$root/DCIM', '$root/Pictures'};
+  for (final dir in {outputDir, defaultOutputDir}) {
+    if (protectedDirs.contains(dir)) {
+      wipeFlat(dir, appOut);
+    } else if (dir == defaultOutputDir) {
+      wipeTree(dir);
+    } else {
+      wipeFlat(dir, (f) => true);
+    }
+  }
+  wipeTree(rawImagesDir);
+  wipeTree('$baseDir/.scans');
+  wipeTree(tmpDir);
+  wipeTree(defaultMDest);
+  // ظ†ط³ط® ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹ ط§ظ„ظ…طھط³ظ…ظٹط© ظ„ظˆ ط§ظ„ظپظˆظ„ط¯ط± ظ…ط®طµطµ
+  try {
+    final dest = loadMOut();
+    if (dest != defaultMDest) {
+      for (final r in loadMState()) {
+        final p = r.openPath;
+        if (r.newName != null && p != null && p != r.srcPath && p.startsWith(dest)) {
+          final f = File(p);
+          if (f.existsSync()) delFile(f);
+        }
+        r.ctl.dispose();
+      }
+    }
+  } catch (_) {}
+  for (final p in [fixPath, mStatePath, '$baseDir/id_debug.txt']) {
+    final f = File(p);
+    if (f.existsSync()) delFile(f);
+  }
+  try {
+    final cfg = _readCfg();
+    cfg.remove('doneM');
+    _writeCfg(cfg);
+  } catch (_) {}
+  // ط§ظ„ظƒط§ط´ ظˆط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ظ…ط¤ظ‚طھط© ط¨طھط§ط¹ط© ط§ظ„طھط·ط¨ظٹظ‚
+  try {
+    for (final e in Directory.systemTemp.listSync(followLinks: false)) {
+      if (e is File) {
+        delFile(e);
+      } else if (e is Directory) {
+        wipeTree(e.path);
+      }
+    }
+  } catch (_) {}
+  imageCache.clear();
+  imageCache.clearLiveImages();
+  closingTxn.value = <int, int>{};
+  wipeSignal.value++;
+  final mb = (bytes / 1048576).toStringAsFixed(1);
+  m.showSnackBar(SnackBar(
+      content: w.Text(ar ? 'طھظ… ط§ظ„ظ…ط³ط­: $files ظ…ظ„ظپ ($mb ظ…ظٹط¬ط§) ًں§¹' : 'Wiped: $files files ($mb MB) ًں§¹')));
+}
+
+final ValueNotifier<int> sharedDays = ValueNotifier<int>(0); // ط§ظ„ظپطھط±ط© (ط§ظ„ظٹظˆظ…/ظٹظˆظ…ظٹظ†/...) ظˆط§ط­ط¯ط© ظ„ظ„طھط§ط¨ظٹظ†
+final ValueNotifier<int> homeBadge = ValueNotifier<int>(0); // ط¹ط¯ط¯ ط§ظ„ظ„ظٹ ظ…ط­طھط§ط¬ ظ…ط±ط§ط¬ط¹ط© ظپظٹ ط§ظ„طھظ‚ظپظٹظ„
+final ValueNotifier<int> machBadge = ValueNotifier<int>(0); // ط¹ط¯ط¯ ط§ظ„ظ„ظٹ ظ…ط­طھط§ط¬ ظ…ط±ط§ط¬ط¹ط© ظپظٹ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹
 
 void _syncBadge(ValueNotifier<int> n, int v) {
   if (n.value == v) return;
@@ -620,10 +846,10 @@ Future<void> shareDebugLog(BuildContext context) async {
   final m = ScaffoldMessenger.of(context);
   final f = File('$baseDir/id_debug.txt');
   if (!f.existsSync()) {
-    m.showSnackBar(const SnackBar(content: Text('مفيش لوج لسه. شغّل الفحص الأول.')));
+    m.showSnackBar(const SnackBar(content: Text('ظ…ظپظٹط´ ظ„ظˆط¬ ظ„ط³ظ‡. ط´ط؛ظ‘ظ„ ط§ظ„ظپط­طµ ط§ظ„ط£ظˆظ„.')));
     return;
   }
-  await Share.shareXFiles([XFile(f.path, mimeType: 'text/plain')], text: 'لوج التطبيق');
+  await Share.shareXFiles([XFile(f.path, mimeType: 'text/plain')], text: 'ظ„ظˆط¬ ط§ظ„طھط·ط¨ظٹظ‚');
 }
 
 ThemeData _buildTheme(Brightness b) {
@@ -661,9 +887,9 @@ class _LangScope extends InheritedNotifier<AppSettings> {
       : super(key: key, notifier: notifier, child: child);
 }
 
-// ───────────────────── الترجمة (عربي ← إنجليزي) ─────────────────────
-// النصوص مكتوبة بالعربي في الكود، وبتتترجم وقت العرض لما اللغة تكون إنجليزي.
-// أي نص عربي مش موجود في القاموس بيفضل زي ما هو.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط§ظ„طھط±ط¬ظ…ط© (ط¹ط±ط¨ظٹ â†گ ط¥ظ†ط¬ظ„ظٹط²ظٹ) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ط§ظ„ظ†طµظˆطµ ظ…ظƒطھظˆط¨ط© ط¨ط§ظ„ط¹ط±ط¨ظٹ ظپظٹ ط§ظ„ظƒظˆط¯طŒ ظˆط¨طھطھطھط±ط¬ظ… ظˆظ‚طھ ط§ظ„ط¹ط±ط¶ ظ„ظ…ط§ ط§ظ„ظ„ط؛ط© طھظƒظˆظ† ط¥ظ†ط¬ظ„ظٹط²ظٹ.
+// ط£ظٹ ظ†طµ ط¹ط±ط¨ظٹ ظ…ط´ ظ…ظˆط¬ظˆط¯ ظپظٹ ط§ظ„ظ‚ط§ظ…ظˆط³ ط¨ظٹظپط¶ظ„ ط²ظٹ ظ…ط§ ظ‡ظˆ.
 class Text extends StatelessWidget {
   const Text(
     this.data, {
@@ -735,299 +961,299 @@ String _translateEn(String s) {
     final en = _kEnPhrases[i][1];
     out = out.replaceAllMapped(_phraseRes[i], (_) => en);
   }
-  return out.replaceAll('،', ',').replaceAll('؟', '?');
+  return out.replaceAll('طŒ', ',').replaceAll('طں', '?');
 }
 
 const Map<String, String> _kEnExact = {
-  'اليوم': 'Today',
-  'الكل': 'All',
-  'تمام': 'OK',
-  'لا': 'No',
-  'إلغاء': 'Cancel',
-  'مسح': 'Delete',
-  'حفظ': 'Save',
-  'عرض': 'View',
-  'الصح': 'Correct',
-  'تغيير': 'Change',
-  'تجريبي': 'Dev',
-  'يومين': '2 days',
-  '؟': '?',
-  'صح ✓': 'Correct ✓',
-  'غلط ✗': 'Wrong ✗',
-  'المزيد': 'More',
-  'المصدر': 'Source',
-  'الإخراج': 'Output',
-  'واتساب': 'WhatsApp',
-  'إكسيل': 'Excel',
-  'تدوير': 'Rotate',
-  'السابق': 'Previous',
-  'التالي': 'Next',
-  'إيقاف': 'Stop',
-  'مراجعة': 'Review',
-  'ماكينة': 'Machine',
-  'الاسكندريه': 'Alexandria'
+  'ط§ظ„ظٹظˆظ…': 'Today',
+  'ط§ظ„ظƒظ„': 'All',
+  'طھظ…ط§ظ…': 'OK',
+  'ظ„ط§': 'No',
+  'ط¥ظ„ط؛ط§ط،': 'Cancel',
+  'ظ…ط³ط­': 'Delete',
+  'ط­ظپط¸': 'Save',
+  'ط¹ط±ط¶': 'View',
+  'ط§ظ„طµط­': 'Correct',
+  'طھط؛ظٹظٹط±': 'Change',
+  'طھط¬ط±ظٹط¨ظٹ': 'Dev',
+  'ظٹظˆظ…ظٹظ†': '2 days',
+  'طں': '?',
+  'طµط­ âœ“': 'Correct âœ“',
+  'ط؛ظ„ط· âœ—': 'Wrong âœ—',
+  'ط§ظ„ظ…ط²ظٹط¯': 'More',
+  'ط§ظ„ظ…طµط¯ط±': 'Source',
+  'ط§ظ„ط¥ط®ط±ط§ط¬': 'Output',
+  'ظˆط§طھط³ط§ط¨': 'WhatsApp',
+  'ط¥ظƒط³ظٹظ„': 'Excel',
+  'طھط¯ظˆظٹط±': 'Rotate',
+  'ط§ظ„ط³ط§ط¨ظ‚': 'Previous',
+  'ط§ظ„طھط§ظ„ظٹ': 'Next',
+  'ط¥ظٹظ‚ط§ظپ': 'Stop',
+  'ظ…ط±ط§ط¬ط¹ط©': 'Review',
+  'ظ…ط§ظƒظٹظ†ط©': 'Machine',
+  'ظ†طھظٹط¬ط©': 'Result'
 };
 
 const List<List<String>> _kEnRules = [
-  [r'(\d+) من (\d+)', '{1} of {2}'],
-  [r'إيصال (\d+) بتاريخ', 'Receipt {1} dated'],
-  [r'ناقص (\d+) ماكينة', 'missing {1} machine(s)'],
-  [r'مراجعة (\d+) / (\d+)', 'Review {1} / {2}'],
-  [r'فاضل (\d+) لسه', '{1} remaining']
+  [r'(\d+) ظ…ظ† (\d+)', '{1} of {2}'],
+  [r'ط¥ظٹطµط§ظ„ (\d+) ط¨طھط§ط±ظٹط®', 'Receipt {1} dated'],
+  [r'ظ†ط§ظ‚طµ (\d+) ظ…ط§ظƒظٹظ†ط©', 'missing {1} machine(s)'],
+  [r'ظ…ط±ط§ط¬ط¹ط© (\d+) / (\d+)', 'Review {1} / {2}'],
+  [r'ظپط§ط¶ظ„ (\d+) ظ„ط³ظ‡', '{1} remaining']
 ];
 
-// مرتبة من الأطول للأقصر علشان العبارات الطويلة تتبدّل الأول
+// ظ…ط±طھط¨ط© ظ…ظ† ط§ظ„ط£ط·ظˆظ„ ظ„ظ„ط£ظ‚طµط± ط¹ظ„ط´ط§ظ† ط§ظ„ط¹ط¨ط§ط±ط§طھ ط§ظ„ط·ظˆظٹظ„ط© طھطھط¨ط¯ظ‘ظ„ ط§ظ„ط£ظˆظ„
 const List<List<String>> _kEnPhrases = [
-  ['Terminal ID مش واضح، الوحدة اتحددت من Merchant ID/الاسم جوه الـ PDF، راجع', 'Terminal ID unclear; unit determined from Merchant ID/name inside the PDF, review'],
-  ['الملف ده مش واضح إنه إيصال ماكينة (قراءة ضعيفة للـ Terminal ID)، راجعه', 'This file does not look like a machine receipt (weak Terminal ID reading), review it'],
-  ['الوحدة اتحددت بالاسم/الميرشانت فقط - اتأكد من الماكينة واضغط حفظ', 'Unit was determined by name/merchant only - verify the machine and tap Save'],
-  ['اضغط "بدء المعالجة الشاملة" لسحب الصور وتوليد الإكسيل والـ PDF.', 'Tap "Run full processing" to collect the images and generate the Excel and PDF.'],
-  ['التطبيق اتجاهل الصورة دي لأن شكلها إيصال دفع أو مستند مش باتش', 'The app ignored this image because it looks like a payment receipt or a document, not a batch'],
-  ['اضغط "فحص وإعادة تسمية" لفحص إيصالات الدفع من مستندات واتساب.', 'Tap "Scan & rename" to scan payment receipts from WhatsApp documents.'],
-  ['مفيش صور (في الفترة المحددة) ولا ملفات PDF في المجلد المختار', 'No images (in the selected period) and no PDF files in the selected folder'],
-  ['العد وقف أكتر من مرة (التطبيق اتقفل). من ⋮ اختار إعادة العد', 'Counting stopped more than once (the app closed). From ⋮ choose Recount'],
-  ['مش محسوب في الإجمالي لحد ما تقرر. زوّم على الباتش وقارن', 'Not counted in the total until you decide. Zoom in on the batch and compare'],
-  ['اتعمل لها PDF منفصل لكل يوم، ومش داخلة في إجماليات يوم', 'a separate PDF was created for each day, and they are not included in the totals of day'],
-  ['زوّم وشوف: لو باتش حقيقي ادخله وكمّل المبلغ والماكينة', 'Zoom in and check: if it is a real batch, enter it and fill in the amount and machine'],
-  ['الـ PDF اتعرّف على نفس ماكينة ملف تاني، اتسمّى ماكينة', 'The PDF was identified as the same machine as another file, named machine'],
-  ['وهتتمسح نتيجة الفحص. (ملفات واتساب الأصلية مش هتتمس)', 'The scan result will also be deleted. (Original WhatsApp files will not be touched)'],
-  ['ظهرت في صورة تانية بمبلغ مختلف - اتحسبت كباتش إضافي', 'appeared in another image with a different amount - counted as an extra batch'],
-  ['فيه إيصال إقفال/ملخص/إعادة طباعة (اتجاهل ومش معدود)', 'Contains a closing/summary/reprint receipt (ignored, not counted)'],
-  ['فولدر الإخراج ده عام، فهيتمسح بس ملفات التطبيق منه', 'this output folder is shared, so only the app files will be deleted from it'],
-  ['عدد إيصالات الدفع: لسه ما اتعدّش (اضغط بدء العد)', 'Payment receipts count: not counted yet (tap Start counting)'],
-  ['مش لاقي فولدر مستندات واتساب. اختار فولدر بإيدك', 'Could not find the WhatsApp documents folder. Pick a folder manually'],
-  ['اتجاهلته: شكله إيصال دفع/مستند مش باتش - راجعه', 'Ignored: looks like a payment receipt/document, not a batch - review it'],
-  ['ملف لسه ما اتعدّش، اضغط "فحص" وهيكمّل من مكانه', 'file(s) not counted yet, tap "Scan" and it will continue where it left off'],
-  ['يجب منح إذن الوصول إلى جميع الملفات للمتابعة', 'You must grant all-files access to continue'],
-  ['لا توجد صور في مجلد الواتساب بالفترة المحددة', 'No images in the WhatsApp folder for the selected period'],
-  ['تعذر العثور على مجلد صور الواتساب تلقائياً', 'Could not find the WhatsApp images folder automatically'],
-  ['مش قادر أقرا المبلغ أو الوحدة - اضغط تعديل', 'Cannot read the amount or the unit - tap Edit'],
-  ['ممكن إيصالات ناقصة أو مش اتقرت، راجع الملف', 'possibly missing receipts or unread ones, check the file'],
-  ['ملف لسه ما اتعدّش. اضغط "بدء العد" لما تحب', 'file(s) not counted yet. Tap "Start counting" when you want'],
-  ['الماكينة/الوحدة اتحددت تلقائياً - اتأكد', 'Machine/unit was determined automatically - verify'],
-  ['مشكوك إنه مكرر - مش محسوب لحد ما تراجعه', 'Possible duplicate - not counted until reviewed'],
-  ['صورة، ولم يتم العثور على إيصالات مطابقة', 'image(s), and no matching receipts were found'],
-  ['صفحة فشلت قراءتها، العدد ممكن يكون ناقص', 'page(s) failed to read, the count may be incomplete'],
-  ['كل الملفات في الفترة دي اتفحصت قبل كده', 'All files in this period were already scanned'],
-  ['جاري توليد الملفات وتحديث الشيتات...', 'Generating files and updating sheets...'],
-  ['لازم تسمح بالوصول لكل الملفات الأول', 'You need to allow access to all files first'],
-  ['الملف مش موجود. شغّل المعالجة الأول', 'File not found. Run the processing first'],
-  ['مراجعة التكرار وترقيم الماكينات...', 'Checking duplicates and numbering machines...'],
-  ['الوحدة اتحددت بالاسم/الميرشانت فقط', 'Unit was determined by name/merchant only'],
-  ['اسحب أي ملف لتعليمه: صح ✓ أو غلط ✗', 'Swipe any file to mark it: correct ✓ or wrong ✗'],
-  ['مقدرتش أفتح الفولدر. المسار اتنسخ', 'Could not open the folder. Path copied'],
-  ['تقرير إيصالات الإسكندرية (الرسمي)', 'Alexandria receipts report (official)'],
-  ['لم يتم إنشاء ملفات بعد لمشاركتها', 'No files have been created yet to share'],
-  ['ولا مضاف للتطبيق)، فمتعملش إكسيل', 'nor added to the app), so no Excel was created'],
-  ['مفيش صور. بدوّر على ملف PDF اسمه', 'No images. Looking for a PDF file named'],
-  ['مش قادر أعرف الماكينة من الـ PDF', 'Cannot identify the machine from the PDF'],
-  ['ملفات المراجعة غير متاحة حالياً', 'Review files are not available right now'],
-  ['مشكوك إنه مكرر (نفس مبلغ ماكينة', 'Possible duplicate (same amount as machine'],
-  ['مش قادر أعرف التاريخ من الـ PDF', 'Cannot identify the date from the PDF'],
-  ['استبعدته قبل كده - تقدر ترجّعه', 'excluded earlier - you can restore it'],
-  ['المرشح التاني من قراءة الـ PDF', 'second candidate from reading the PDF'],
-  ['مفيش لوج لسه. شغّل الفحص الأول', 'No log yet. Run the scan first'],
-  ['جاري البحث عن مجلدات الصور...', 'Searching for image folders...'],
-  ['إعادة تسمية الصور وترتيبها...', 'Renaming and sorting images...'],
-  ['اضغط "بدء العد" لعدّ إيصالاته', 'Tap "Start counting" to count its receipts'],
-  ['صفحات الطريقتين اختلفوا فيها:', 'Pages where the two methods differ:'],
-  ['اتعلّم للعد. اضغط "بدء العد".', 'Marked for counting. Tap "Start counting".'],
-  ['مشكوك إنه مكرر: نفس الماكينة', 'Possible duplicate: same machine'],
-  ['اضغط "بدء العد" لعدّ إيصالات', 'Tap "Start counting" to count receipts of'],
-  ['صفحات ما لقيتش فيها إيصالات:', 'Pages with no receipts found:'],
-  ['العد: سريع ← الدقيق (القديم)', 'Counting: fast, then precise (old)'],
-  ['عدد إيصالات الدفع: بيتعدّ...', 'Payment receipts count: counting...'],
-  ['تم توليد ملف الـ PDF المجمع', 'Combined PDF file generated'],
-  ['رقم الماكينة اتحدد تلقائياً', 'Machine number was determined automatically'],
-  ['مش مكرر - احتسبه باتش إضافي', 'Not a duplicate - count it as an extra batch'],
-  ['إيصال (رقمه مش واضح) بتاريخ', 'Receipt (number unclear) dated'],
-  ['مفيش ملفات مسمّاة لمشاركتها', 'No named files to share'],
-  ['مفيش ملفات PDF في الفترة دي', 'No PDF files in this period'],
-  ['مش قادر أكتب في الفولدر ده', 'Cannot write to this folder'],
-  ['مفيش إيصالات محتاجة مراجعة', 'No receipts need review'],
-  ['صورة متجاهلة - محتاجة قرار', 'Ignored image - needs a decision'],
-  ['مفيش برنامج يفتح الملف ده', 'No app can open this file'],
-  ['فيه إيصالات بتواريخ تانية', 'There are receipts with other dates'],
-  ['فحص الصور المقلوبة (أبطأ)', 'Check rotated images (slower)'],
-  ['جاري فحص إيصالات الدفع...', 'Scanning payment receipts...'],
-  ['واتساب - مستندات (تلقائي)', 'WhatsApp - documents (auto)'],
-  ['تقرير إيصالات الإسكندرية', 'Alexandria receipts report'],
-  ['جاري تجهيز صفحات الـ PDF', 'Preparing PDF pages'],
-  ['الإيصال ده مستبعد (مكرر)', 'This receipt is excluded (duplicate)'],
-  ['مفيش برنامج يفتح الـ PDF', 'No app can open the PDF'],
-  ['مش قادر أفتح الفولدر ده', 'Cannot open this folder'],
-  ['انتهى فحص إيصالات الدفع', 'Payment receipts scan finished'],
-  ['جاري البحث عن ملفات PDF', 'Searching for PDF files'],
-  ['مش محسوب لحد ما تراجعه', 'not counted until you review it'],
-  ['إجمالي بعيد عن المعتاد', 'Total far from usual'],
-  ['القراءة التانية للمبلغ', 'The second amount reading'],
-  ['صورة من الصور المرتبة', 'image(s) from the sorted images'],
-  ['جاري فحص الإيصالات...', 'Scanning receipts...'],
-  ['ولا يوجد ملف PDF باسم', 'and there is no PDF file named'],
-  ['لو المبلغ صح اضغط حفظ', 'if the amount is correct, tap Save'],
-  ['ده إيصال أنهي ماكينة؟', 'Which machine is this receipt for?'],
-  ['الملف الأصلي مش موجود', 'Original file not found'],
-  ['ماكينات ما وصلش ملفها', 'Machines with no file received'],
-  ['تعديل بيانات الإيصال', 'Edit receipt data'],
-  ['راجعه من زر المراجعة', 'review it using the review button'],
-  ['المصدر: رجوع لواتساب', 'Source: back to WhatsApp'],
-  ['بدء المعالجة الشاملة', 'Run full processing'],
-  ['بينما أغلب الإيصالات', 'while most receipts are'],
-  ['افتح الفولدر بواسطة', 'Open folder with'],
-  ['المبلغ يحتاج مراجعة', 'Amount needs review'],
-  ['إيصال مكرر للماكينة', 'Duplicate receipt for machine'],
-  ['مقدرتش أدوّر الصورة', 'Could not rotate the image'],
-  ['اتأكد منه واضغط حفظ', 'verify it and tap Save'],
-  ['للمراجعة (مش معدود)', 'For review (not counted)'],
-  ['راجعها لو العدد مهم', 'check them if the count matters'],
-  ['العد: دقيق ← السريع', 'Counting: precise, then fast'],
-  ['متصفح ملفات النظام', 'System file browser'],
-  ['حفظ وتحديث الملفات', 'Save and update files'],
-  ['بقرأ صفحات ملف PDF', 'Reading pages of PDF file'],
-  ['راجع المبلغ يدوياً', 'check the amount manually'],
-  ['الإخراج: الافتراضي', 'Output: default'],
-  ['اختيار هذا الفولدر', 'Choose this folder'],
-  ['مستبعد (علامة غلط)', 'Excluded (marked wrong)'],
-  ['عدد إيصالات الدفع:', 'Payment receipts count:'],
-  ['إلغاء علامة صح/غلط', 'Clear correct/wrong mark'],
-  ['مش موجود في فولدر', 'not found in folder'],
-  ['الوحدة غير معروفة', 'Unknown unit'],
-  ['فتح فولدر الإخراج', 'Open output folder'],
-  ['التاريخ صح - سيبه', 'The date is correct - keep it'],
-  ['مش تبع نفس اليوم:', 'Not from the same day:'],
-  ['بس التسمية ماكينة', 'but the naming says machine'],
-  ['لوج إيصالات الدفع', 'Payment receipts log'],
-  ['الأيام اللي فاتت', 'previous days'],
-  ['تم توليد الإكسيل', 'Excel generated'],
-  ['ملاحظات للمراجعة', 'Notes for review'],
-  ['المبلغ غير مقروء', 'Amount unreadable'],
-  ['مش باتش - تجاهله', 'Not a batch - ignore it'],
-  ['القراءة التانية:', 'Second reading:'],
-  ['أرقام مش لاقيها:', 'Numbers not found:'],
-  ['ملف على إنهم صح؟', 'file(s) as correct?'],
-  ['ملف ونتيجة الفحص', 'file(s) and the scan result'],
-  ['اتأكد من المبلغ', 'check the amount'],
-  ['مفيش حاجة للمسح', 'Nothing to delete'],
-  ['المبلغ الإجمالي', 'Total amount'],
-  ['الإجمالي العام:', 'Grand total:'],
-  ['المصدر: ملف PDF', 'Source: PDF file'],
-  ['واتساب (تلقائي)', 'WhatsApp (auto)'],
-  ['وحدة غير معروفة', 'Unknown unit'],
-  ['ده باتش - ادخله', 'This is a batch - include it'],
-  ['اتعرفت كمان في:', 'also identified in:'],
-  ['العد لقى ماكينة', 'Counting found machine'],
-  ['الملف مش موجود', 'File not found'],
-  ['ملف من الإخراج', 'file(s) from the output'],
-  ['تقرير المراجعة', 'Review report'],
-  ['فشل ملء القالب', 'Failed to fill the template'],
-  ['ماكينات ناقصة:', 'Missing machines:'],
-  ['مشكوك إنه مكرر', 'possible duplicate'],
-  ['رجّعه (احتسبه)', 'Restore (count it)'],
-  ['اكتب مبلغ صحيح', 'Enter a valid amount'],
-  ['مكرر - استبعده', 'Duplicate - exclude it'],
-  ['اختار الماكينة', 'Select machine'],
-  ['اتسمّى، إجمالي', 'named, total'],
-  ['تحديد الماكينة', 'Set machine'],
-  ['إيصالات الدفع', 'Payment receipts'],
-  ['إجمالي ماكينة', 'Total of machine'],
-  ['بعيد عن متوسط', 'is far from the average of'],
-  ['مستبعد (مكرر)', 'Excluded (duplicate)'],
-  ['رقم الماكينة:', 'Machine number:'],
-  ['ماكينات ناقصة', 'Missing machines'],
-  ['تاريخ الإيصال', 'Receipt date'],
-  ['اتسمّى ماكينة', 'Named machine'],
-  ['ملف مسمّى من:', 'named file(s) from:'],
-  ['اتسمّى واتنسخ', 'named and copied'],
-  ['تعريف الملفات', 'Identifying files'],
-  ['عدّ الإيصالات', 'Counting receipts'],
-  ['قراءة تانية:', 'Second reading:'],
-  ['فشلت القراءة', 'read failed'],
-  ['نفس الماكينة', 'Same machine'],
-  ['مستند متجاهل', 'Ignored document'],
-  ['اختيار فولدر', 'Choose folder'],
-  ['فشل التسمية:', 'Naming failed:'],
-  ['تمت التسمية:', 'Naming done:'],
-  ['فشل التعريف:', 'Identification failed:'],
-  ['ناقص القراءة', 'partial read'],
-  ['لوج التقفيل', 'Closing log'],
-  ['تاريخ مختلف', 'Different date'],
-  ['انتهى الفحص', 'Scan finished'],
-  ['ونفس المبلغ', 'and the same amount'],
-  ['راجع الصورة', 'check the image'],
-  ['خليه بتاريخ', 'Set it to date'],
-  ['حفظ والتالي', 'Save & next'],
-  ['اتوقف. فاضل', 'Stopped. Remaining'],
-  ['اكتمل العد:', 'Counting complete:'],
-  ['إرسال الملف', 'Send file'],
-  ['تغيير اللغة', 'Change language'],
-  ['الإسكندرية', 'Alexandria'],
-  ['ملء الشاشة', 'Full screen'],
-  ['بس التسلسل', 'but the sequence'],
-  ['آخر نتيجة:', 'Last result:'],
-  ['فحص وتسمية', 'Scan & name'],
-  ['إرسال الكل', 'Send all'],
-  ['اتراجع: صح', 'Reviewed: correct'],
-  ['إعادة العد', 'Recount'],
-  ['مختلفة عن', 'differs from'],
-  ['اتأكد منه', 'verify it'],
-  ['غير مقروء', 'unreadable'],
-  ['الباقي صح', 'The rest are correct'],
-  ['مسح الكل', 'Delete all'],
-  ['غير محدد', 'Unspecified'],
-  ['للمراجعة', 'for review'],
-  ['الماكينة', 'Machine'],
-  ['المقروء:', 'Read:'],
-  ['استخدمها', 'Use it'],
-  ['فشل العد', 'Counting failed'],
-  ['عدّ سريع', 'Quick count'],
-  ['بدء العد', 'Start counting'],
-  ['التقفيل', 'Closing'],
-  ['ماكينات', 'Machines'],
-  ['والأغلب', 'while most are'],
-  ['المبلغ:', 'Amount:'],
-  ['الإصدار', 'Version'],
-  ['افتراضي', 'default'],
-  ['التسلسل', 'Sequence'],
-  ['الفترة', 'Period'],
-  ['هتتمسح', 'Will delete'],
-  ['تم مسح', 'Deleted'],
-  ['ماكينة', 'Machine'],
-  ['اكتمل!', 'Done!'],
-  ['باتشات', 'batches'],
-  ['تاريخه', 'Date'],
-  ['مستبعد', 'Excluded'],
-  ['تم فحص', 'Scanned'],
-  ['بتاريخ', 'dated'],
-  ['هتعلّم', 'Mark'],
-  ['هيتمسح', 'Will delete'],
-  ['الأصل:', 'Original:'],
-  ['اتسمّى', 'named'],
-  ['مراجعة', 'Review'],
-  ['ملفات', 'files'],
-  ['إيصال', 'receipt(s)'],
-  ['صفحات', 'pages'],
-  ['العدد', 'Count'],
-  ['مقروء', 'read'],
-  ['أيام', 'days'],
-  ['قالب', 'Template'],
-  ['باتش', 'batch'],
-  ['ناقص', 'missing'],
-  ['صفحة', 'page(s)'],
-  ['صورة', 'image(s)'],
-  ['فاضل', 'remaining'],
-  ['راجع', 'review'],
-  ['الكل', 'All'],
-  ['كامل', 'full'],
-  ['ملف', 'file(s)'],
-  ['ج.م', 'EGP'],
-  ['فحص', 'Scan'],
-  ['فيه', 'There are'],
-  ['لسه', 'yet'],
-  ['أو', 'or'],
-  ['و', 'and']
+  ['Terminal ID ظ…ط´ ظˆط§ط¶ط­طŒ ط§ظ„ظˆط­ط¯ط© ط§طھط­ط¯ط¯طھ ظ…ظ† Merchant ID/ط§ظ„ط§ط³ظ… ط¬ظˆظ‡ ط§ظ„ظ€ PDFطŒ ط±ط§ط¬ط¹', 'Terminal ID unclear; unit determined from Merchant ID/name inside the PDF, review'],
+  ['ط§ظ„ظ…ظ„ظپ ط¯ظ‡ ظ…ط´ ظˆط§ط¶ط­ ط¥ظ†ظ‡ ط¥ظٹطµط§ظ„ ظ…ط§ظƒظٹظ†ط© (ظ‚ط±ط§ط،ط© ط¶ط¹ظٹظپط© ظ„ظ„ظ€ Terminal ID)طŒ ط±ط§ط¬ط¹ظ‡', 'This file does not look like a machine receipt (weak Terminal ID reading), review it'],
+  ['ط§ظ„ظˆط­ط¯ط© ط§طھط­ط¯ط¯طھ ط¨ط§ظ„ط§ط³ظ…/ط§ظ„ظ…ظٹط±ط´ط§ظ†طھ ظپظ‚ط· - ط§طھط£ظƒط¯ ظ…ظ† ط§ظ„ظ…ط§ظƒظٹظ†ط© ظˆط§ط¶ط؛ط· ط­ظپط¸', 'Unit was determined by name/merchant only - verify the machine and tap Save'],
+  ['ط§ط¶ط؛ط· "ط¨ط¯ط، ط§ظ„ظ…ط¹ط§ظ„ط¬ط© ط§ظ„ط´ط§ظ…ظ„ط©" ظ„ط³ط­ط¨ ط§ظ„طµظˆط± ظˆطھظˆظ„ظٹط¯ ط§ظ„ط¥ظƒط³ظٹظ„ ظˆط§ظ„ظ€ PDF.', 'Tap "Run full processing" to collect the images and generate the Excel and PDF.'],
+  ['ط§ظ„طھط·ط¨ظٹظ‚ ط§طھط¬ط§ظ‡ظ„ ط§ظ„طµظˆط±ط© ط¯ظٹ ظ„ط£ظ† ط´ظƒظ„ظ‡ط§ ط¥ظٹطµط§ظ„ ط¯ظپط¹ ط£ظˆ ظ…ط³طھظ†ط¯ ظ…ط´ ط¨ط§طھط´', 'The app ignored this image because it looks like a payment receipt or a document, not a batch'],
+  ['ط§ط¶ط؛ط· "ظپط­طµ ظˆط¥ط¹ط§ط¯ط© طھط³ظ…ظٹط©" ظ„ظپط­طµ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹ ظ…ظ† ظ…ط³طھظ†ط¯ط§طھ ظˆط§طھط³ط§ط¨.', 'Tap "Scan & rename" to scan payment receipts from WhatsApp documents.'],
+  ['ظ…ظپظٹط´ طµظˆط± (ظپظٹ ط§ظ„ظپطھط±ط© ط§ظ„ظ…ط­ط¯ط¯ط©) ظˆظ„ط§ ظ…ظ„ظپط§طھ PDF ظپظٹ ط§ظ„ظ…ط¬ظ„ط¯ ط§ظ„ظ…ط®طھط§ط±', 'No images (in the selected period) and no PDF files in the selected folder'],
+  ['ط§ظ„ط¹ط¯ ظˆظ‚ظپ ط£ظƒطھط± ظ…ظ† ظ…ط±ط© (ط§ظ„طھط·ط¨ظٹظ‚ ط§طھظ‚ظپظ„). ظ…ظ† â‹® ط§ط®طھط§ط± ط¥ط¹ط§ط¯ط© ط§ظ„ط¹ط¯', 'Counting stopped more than once (the app closed). From â‹® choose Recount'],
+  ['ظ…ط´ ظ…ط­ط³ظˆط¨ ظپظٹ ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ ظ„ط­ط¯ ظ…ط§ طھظ‚ط±ط±. ط²ظˆظ‘ظ… ط¹ظ„ظ‰ ط§ظ„ط¨ط§طھط´ ظˆظ‚ط§ط±ظ†', 'Not counted in the total until you decide. Zoom in on the batch and compare'],
+  ['ط§طھط¹ظ…ظ„ ظ„ظ‡ط§ PDF ظ…ظ†ظپطµظ„ ظ„ظƒظ„ ظٹظˆظ…طŒ ظˆظ…ط´ ط¯ط§ط®ظ„ط© ظپظٹ ط¥ط¬ظ…ط§ظ„ظٹط§طھ ظٹظˆظ…', 'a separate PDF was created for each day, and they are not included in the totals of day'],
+  ['ط²ظˆظ‘ظ… ظˆط´ظˆظپ: ظ„ظˆ ط¨ط§طھط´ ط­ظ‚ظٹظ‚ظٹ ط§ط¯ط®ظ„ظ‡ ظˆظƒظ…ظ‘ظ„ ط§ظ„ظ…ط¨ظ„ط؛ ظˆط§ظ„ظ…ط§ظƒظٹظ†ط©', 'Zoom in and check: if it is a real batch, enter it and fill in the amount and machine'],
+  ['ط§ظ„ظ€ PDF ط§طھط¹ط±ظ‘ظپ ط¹ظ„ظ‰ ظ†ظپط³ ظ…ط§ظƒظٹظ†ط© ظ…ظ„ظپ طھط§ظ†ظٹطŒ ط§طھط³ظ…ظ‘ظ‰ ظ…ط§ظƒظٹظ†ط©', 'The PDF was identified as the same machine as another file, named machine'],
+  ['ظˆظ‡طھطھظ…ط³ط­ ظ†طھظٹط¬ط© ط§ظ„ظپط­طµ. (ظ…ظ„ظپط§طھ ظˆط§طھط³ط§ط¨ ط§ظ„ط£طµظ„ظٹط© ظ…ط´ ظ‡طھطھظ…ط³)', 'The scan result will also be deleted. (Original WhatsApp files will not be touched)'],
+  ['ط¸ظ‡ط±طھ ظپظٹ طµظˆط±ط© طھط§ظ†ظٹط© ط¨ظ…ط¨ظ„ط؛ ظ…ط®طھظ„ظپ - ط§طھط­ط³ط¨طھ ظƒط¨ط§طھط´ ط¥ط¶ط§ظپظٹ', 'appeared in another image with a different amount - counted as an extra batch'],
+  ['ظپظٹظ‡ ط¥ظٹطµط§ظ„ ط¥ظ‚ظپط§ظ„/ظ…ظ„ط®طµ/ط¥ط¹ط§ط¯ط© ط·ط¨ط§ط¹ط© (ط§طھط¬ط§ظ‡ظ„ ظˆظ…ط´ ظ…ط¹ط¯ظˆط¯)', 'Contains a closing/summary/reprint receipt (ignored, not counted)'],
+  ['ظپظˆظ„ط¯ط± ط§ظ„ط¥ط®ط±ط§ط¬ ط¯ظ‡ ط¹ط§ظ…طŒ ظپظ‡ظٹطھظ…ط³ط­ ط¨ط³ ظ…ظ„ظپط§طھ ط§ظ„طھط·ط¨ظٹظ‚ ظ…ظ†ظ‡', 'this output folder is shared, so only the app files will be deleted from it'],
+  ['ط¹ط¯ط¯ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹: ظ„ط³ظ‡ ظ…ط§ ط§طھط¹ط¯ظ‘ط´ (ط§ط¶ط؛ط· ط¨ط¯ط، ط§ظ„ط¹ط¯)', 'Payment receipts count: not counted yet (tap Start counting)'],
+  ['ظ…ط´ ظ„ط§ظ‚ظٹ ظپظˆظ„ط¯ط± ظ…ط³طھظ†ط¯ط§طھ ظˆط§طھط³ط§ط¨. ط§ط®طھط§ط± ظپظˆظ„ط¯ط± ط¨ط¥ظٹط¯ظƒ', 'Could not find the WhatsApp documents folder. Pick a folder manually'],
+  ['ط§طھط¬ط§ظ‡ظ„طھظ‡: ط´ظƒظ„ظ‡ ط¥ظٹطµط§ظ„ ط¯ظپط¹/ظ…ط³طھظ†ط¯ ظ…ط´ ط¨ط§طھط´ - ط±ط§ط¬ط¹ظ‡', 'Ignored: looks like a payment receipt/document, not a batch - review it'],
+  ['ظ…ظ„ظپ ظ„ط³ظ‡ ظ…ط§ ط§طھط¹ط¯ظ‘ط´طŒ ط§ط¶ط؛ط· "ظپط­طµ" ظˆظ‡ظٹظƒظ…ظ‘ظ„ ظ…ظ† ظ…ظƒط§ظ†ظ‡', 'file(s) not counted yet, tap "Scan" and it will continue where it left off'],
+  ['ظٹط¬ط¨ ظ…ظ†ط­ ط¥ط°ظ† ط§ظ„ظˆطµظˆظ„ ط¥ظ„ظ‰ ط¬ظ…ظٹط¹ ط§ظ„ظ…ظ„ظپط§طھ ظ„ظ„ظ…طھط§ط¨ط¹ط©', 'You must grant all-files access to continue'],
+  ['ظ„ط§ طھظˆط¬ط¯ طµظˆط± ظپظٹ ظ…ط¬ظ„ط¯ ط§ظ„ظˆط§طھط³ط§ط¨ ط¨ط§ظ„ظپطھط±ط© ط§ظ„ظ…ط­ط¯ط¯ط©', 'No images in the WhatsApp folder for the selected period'],
+  ['طھط¹ط°ط± ط§ظ„ط¹ط«ظˆط± ط¹ظ„ظ‰ ظ…ط¬ظ„ط¯ طµظˆط± ط§ظ„ظˆط§طھط³ط§ط¨ طھظ„ظ‚ط§ط¦ظٹط§ظ‹', 'Could not find the WhatsApp images folder automatically'],
+  ['ظ…ط´ ظ‚ط§ط¯ط± ط£ظ‚ط±ط§ ط§ظ„ظ…ط¨ظ„ط؛ ط£ظˆ ط§ظ„ظˆط­ط¯ط© - ط§ط¶ط؛ط· طھط¹ط¯ظٹظ„', 'Cannot read the amount or the unit - tap Edit'],
+  ['ظ…ظ…ظƒظ† ط¥ظٹطµط§ظ„ط§طھ ظ†ط§ظ‚طµط© ط£ظˆ ظ…ط´ ط§طھظ‚ط±طھطŒ ط±ط§ط¬ط¹ ط§ظ„ظ…ظ„ظپ', 'possibly missing receipts or unread ones, check the file'],
+  ['ظ…ظ„ظپ ظ„ط³ظ‡ ظ…ط§ ط§طھط¹ط¯ظ‘ط´. ط§ط¶ط؛ط· "ط¨ط¯ط، ط§ظ„ط¹ط¯" ظ„ظ…ط§ طھط­ط¨', 'file(s) not counted yet. Tap "Start counting" when you want'],
+  ['ط§ظ„ظ…ط§ظƒظٹظ†ط©/ط§ظ„ظˆط­ط¯ط© ط§طھط­ط¯ط¯طھ طھظ„ظ‚ط§ط¦ظٹط§ظ‹ - ط§طھط£ظƒط¯', 'Machine/unit was determined automatically - verify'],
+  ['ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط± - ظ…ط´ ظ…ط­ط³ظˆط¨ ظ„ط­ط¯ ظ…ط§ طھط±ط§ط¬ط¹ظ‡', 'Possible duplicate - not counted until reviewed'],
+  ['طµظˆط±ط©طŒ ظˆظ„ظ… ظٹطھظ… ط§ظ„ط¹ط«ظˆط± ط¹ظ„ظ‰ ط¥ظٹطµط§ظ„ط§طھ ظ…ط·ط§ط¨ظ‚ط©', 'image(s), and no matching receipts were found'],
+  ['طµظپط­ط© ظپط´ظ„طھ ظ‚ط±ط§ط،طھظ‡ط§طŒ ط§ظ„ط¹ط¯ط¯ ظ…ظ…ظƒظ† ظٹظƒظˆظ† ظ†ط§ظ‚طµ', 'page(s) failed to read, the count may be incomplete'],
+  ['ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ ظپظٹ ط§ظ„ظپطھط±ط© ط¯ظٹ ط§طھظپط­طµطھ ظ‚ط¨ظ„ ظƒط¯ظ‡', 'All files in this period were already scanned'],
+  ['ط¬ط§ط±ظٹ طھظˆظ„ظٹط¯ ط§ظ„ظ…ظ„ظپط§طھ ظˆطھط­ط¯ظٹط« ط§ظ„ط´ظٹطھط§طھ...', 'Generating files and updating sheets...'],
+  ['ظ„ط§ط²ظ… طھط³ظ…ط­ ط¨ط§ظ„ظˆطµظˆظ„ ظ„ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ط£ظˆظ„', 'You need to allow access to all files first'],
+  ['ط§ظ„ظ…ظ„ظپ ظ…ط´ ظ…ظˆط¬ظˆط¯. ط´ط؛ظ‘ظ„ ط§ظ„ظ…ط¹ط§ظ„ط¬ط© ط§ظ„ط£ظˆظ„', 'File not found. Run the processing first'],
+  ['ظ…ط±ط§ط¬ط¹ط© ط§ظ„طھظƒط±ط§ط± ظˆطھط±ظ‚ظٹظ… ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ...', 'Checking duplicates and numbering machines...'],
+  ['ط§ظ„ظˆط­ط¯ط© ط§طھط­ط¯ط¯طھ ط¨ط§ظ„ط§ط³ظ…/ط§ظ„ظ…ظٹط±ط´ط§ظ†طھ ظپظ‚ط·', 'Unit was determined by name/merchant only'],
+  ['ط§ط³ط­ط¨ ط£ظٹ ظ…ظ„ظپ ظ„طھط¹ظ„ظٹظ…ظ‡: طµط­ âœ“ ط£ظˆ ط؛ظ„ط· âœ—', 'Swipe any file to mark it: correct âœ“ or wrong âœ—'],
+  ['ظ…ظ‚ط¯ط±طھط´ ط£ظپطھط­ ط§ظ„ظپظˆظ„ط¯ط±. ط§ظ„ظ…ط³ط§ط± ط§طھظ†ط³ط®', 'Could not open the folder. Path copied'],
+  ['طھظ‚ط±ظٹط± ط§ظ„ط¥ظٹطµط§ظ„ط§طھ (ط§ظ„ط±ط³ظ…ظٹ)', 'Receipts report (official)'],
+  ['ظ„ظ… ظٹطھظ… ط¥ظ†ط´ط§ط، ظ…ظ„ظپط§طھ ط¨ط¹ط¯ ظ„ظ…ط´ط§ط±ظƒطھظ‡ط§', 'No files have been created yet to share'],
+  ['ظˆظ„ط§ ظ…ط¶ط§ظپ ظ„ظ„طھط·ط¨ظٹظ‚)طŒ ظپظ…طھط¹ظ…ظ„ط´ ط¥ظƒط³ظٹظ„', 'nor added to the app), so no Excel was created'],
+  ['ظ…ظپظٹط´ طµظˆط±. ط¨ط¯ظˆظ‘ط± ط¹ظ„ظ‰ ظ…ظ„ظپ PDF ط§ط³ظ…ظ‡', 'No images. Looking for a PDF file named'],
+  ['ظ…ط´ ظ‚ط§ط¯ط± ط£ط¹ط±ظپ ط§ظ„ظ…ط§ظƒظٹظ†ط© ظ…ظ† ط§ظ„ظ€ PDF', 'Cannot identify the machine from the PDF'],
+  ['ظ…ظ„ظپط§طھ ط§ظ„ظ…ط±ط§ط¬ط¹ط© ط؛ظٹط± ظ…طھط§ط­ط© ط­ط§ظ„ظٹط§ظ‹', 'Review files are not available right now'],
+  ['ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط± (ظ†ظپط³ ظ…ط¨ظ„ط؛ ظ…ط§ظƒظٹظ†ط©', 'Possible duplicate (same amount as machine'],
+  ['ظ…ط´ ظ‚ط§ط¯ط± ط£ط¹ط±ظپ ط§ظ„طھط§ط±ظٹط® ظ…ظ† ط§ظ„ظ€ PDF', 'Cannot identify the date from the PDF'],
+  ['ط§ط³طھط¨ط¹ط¯طھظ‡ ظ‚ط¨ظ„ ظƒط¯ظ‡ - طھظ‚ط¯ط± طھط±ط¬ظ‘ط¹ظ‡', 'excluded earlier - you can restore it'],
+  ['ط§ظ„ظ…ط±ط´ط­ ط§ظ„طھط§ظ†ظٹ ظ…ظ† ظ‚ط±ط§ط،ط© ط§ظ„ظ€ PDF', 'second candidate from reading the PDF'],
+  ['ظ…ظپظٹط´ ظ„ظˆط¬ ظ„ط³ظ‡. ط´ط؛ظ‘ظ„ ط§ظ„ظپط­طµ ط§ظ„ط£ظˆظ„', 'No log yet. Run the scan first'],
+  ['ط¬ط§ط±ظٹ ط§ظ„ط¨ط­ط« ط¹ظ† ظ…ط¬ظ„ط¯ط§طھ ط§ظ„طµظˆط±...', 'Searching for image folders...'],
+  ['ط¥ط¹ط§ط¯ط© طھط³ظ…ظٹط© ط§ظ„طµظˆط± ظˆطھط±طھظٹط¨ظ‡ط§...', 'Renaming and sorting images...'],
+  ['ط§ط¶ط؛ط· "ط¨ط¯ط، ط§ظ„ط¹ط¯" ظ„ط¹ط¯ظ‘ ط¥ظٹطµط§ظ„ط§طھظ‡', 'Tap "Start counting" to count its receipts'],
+  ['طµظپط­ط§طھ ط§ظ„ط·ط±ظٹظ‚طھظٹظ† ط§ط®طھظ„ظپظˆط§ ظپظٹظ‡ط§:', 'Pages where the two methods differ:'],
+  ['ط§طھط¹ظ„ظ‘ظ… ظ„ظ„ط¹ط¯. ط§ط¶ط؛ط· "ط¨ط¯ط، ط§ظ„ط¹ط¯".', 'Marked for counting. Tap "Start counting".'],
+  ['ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط±: ظ†ظپط³ ط§ظ„ظ…ط§ظƒظٹظ†ط©', 'Possible duplicate: same machine'],
+  ['ط§ط¶ط؛ط· "ط¨ط¯ط، ط§ظ„ط¹ط¯" ظ„ط¹ط¯ظ‘ ط¥ظٹطµط§ظ„ط§طھ', 'Tap "Start counting" to count receipts of'],
+  ['طµظپط­ط§طھ ظ…ط§ ظ„ظ‚ظٹطھط´ ظپظٹظ‡ط§ ط¥ظٹطµط§ظ„ط§طھ:', 'Pages with no receipts found:'],
+  ['ط§ظ„ط¹ط¯: ط³ط±ظٹط¹ â†گ ط§ظ„ط¯ظ‚ظٹظ‚ (ط§ظ„ظ‚ط¯ظٹظ…)', 'Counting: fast, then precise (old)'],
+  ['ط¹ط¯ط¯ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹: ط¨ظٹطھط¹ط¯ظ‘...', 'Payment receipts count: counting...'],
+  ['طھظ… طھظˆظ„ظٹط¯ ظ…ظ„ظپ ط§ظ„ظ€ PDF ط§ظ„ظ…ط¬ظ…ط¹', 'Combined PDF file generated'],
+  ['ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط© ط§طھط­ط¯ط¯ طھظ„ظ‚ط§ط¦ظٹط§ظ‹', 'Machine number was determined automatically'],
+  ['ظ…ط´ ظ…ظƒط±ط± - ط§ط­طھط³ط¨ظ‡ ط¨ط§طھط´ ط¥ط¶ط§ظپظٹ', 'Not a duplicate - count it as an extra batch'],
+  ['ط¥ظٹطµط§ظ„ (ط±ظ‚ظ…ظ‡ ظ…ط´ ظˆط§ط¶ط­) ط¨طھط§ط±ظٹط®', 'Receipt (number unclear) dated'],
+  ['ظ…ظپظٹط´ ظ…ظ„ظپط§طھ ظ…ط³ظ…ظ‘ط§ط© ظ„ظ…ط´ط§ط±ظƒطھظ‡ط§', 'No named files to share'],
+  ['ظ…ظپظٹط´ ظ…ظ„ظپط§طھ PDF ظپظٹ ط§ظ„ظپطھط±ط© ط¯ظٹ', 'No PDF files in this period'],
+  ['ظ…ط´ ظ‚ط§ط¯ط± ط£ظƒطھط¨ ظپظٹ ط§ظ„ظپظˆظ„ط¯ط± ط¯ظ‡', 'Cannot write to this folder'],
+  ['ظ…ظپظٹط´ ط¥ظٹطµط§ظ„ط§طھ ظ…ط­طھط§ط¬ط© ظ…ط±ط§ط¬ط¹ط©', 'No receipts need review'],
+  ['طµظˆط±ط© ظ…طھط¬ط§ظ‡ظ„ط© - ظ…ط­طھط§ط¬ط© ظ‚ط±ط§ط±', 'Ignored image - needs a decision'],
+  ['ظ…ظپظٹط´ ط¨ط±ظ†ط§ظ…ط¬ ظٹظپطھط­ ط§ظ„ظ…ظ„ظپ ط¯ظ‡', 'No app can open this file'],
+  ['ظپظٹظ‡ ط¥ظٹطµط§ظ„ط§طھ ط¨طھظˆط§ط±ظٹط® طھط§ظ†ظٹط©', 'There are receipts with other dates'],
+  ['ظپط­طµ ط§ظ„طµظˆط± ط§ظ„ظ…ظ‚ظ„ظˆط¨ط© (ط£ط¨ط·ط£)', 'Check rotated images (slower)'],
+  ['ط¬ط§ط±ظٹ ظپط­طµ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹...', 'Scanning payment receipts...'],
+  ['ظˆط§طھط³ط§ط¨ - ظ…ط³طھظ†ط¯ط§طھ (طھظ„ظ‚ط§ط¦ظٹ)', 'WhatsApp - documents (auto)'],
+  ['طھظ‚ط±ظٹط± ط§ظ„ط¥ظٹطµط§ظ„ط§طھ', 'Receipts report'],
+  ['ط¬ط§ط±ظٹ طھط¬ظ‡ظٹط² طµظپط­ط§طھ ط§ظ„ظ€ PDF', 'Preparing PDF pages'],
+  ['ط§ظ„ط¥ظٹطµط§ظ„ ط¯ظ‡ ظ…ط³طھط¨ط¹ط¯ (ظ…ظƒط±ط±)', 'This receipt is excluded (duplicate)'],
+  ['ظ…ظپظٹط´ ط¨ط±ظ†ط§ظ…ط¬ ظٹظپطھط­ ط§ظ„ظ€ PDF', 'No app can open the PDF'],
+  ['ظ…ط´ ظ‚ط§ط¯ط± ط£ظپطھط­ ط§ظ„ظپظˆظ„ط¯ط± ط¯ظ‡', 'Cannot open this folder'],
+  ['ط§ظ†طھظ‡ظ‰ ظپط­طµ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹', 'Payment receipts scan finished'],
+  ['ط¬ط§ط±ظٹ ط§ظ„ط¨ط­ط« ط¹ظ† ظ…ظ„ظپط§طھ PDF', 'Searching for PDF files'],
+  ['ظ…ط´ ظ…ط­ط³ظˆط¨ ظ„ط­ط¯ ظ…ط§ طھط±ط§ط¬ط¹ظ‡', 'not counted until you review it'],
+  ['ط¥ط¬ظ…ط§ظ„ظٹ ط¨ط¹ظٹط¯ ط¹ظ† ط§ظ„ظ…ط¹طھط§ط¯', 'Total far from usual'],
+  ['ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„طھط§ظ†ظٹط© ظ„ظ„ظ…ط¨ظ„ط؛', 'The second amount reading'],
+  ['طµظˆط±ط© ظ…ظ† ط§ظ„طµظˆط± ط§ظ„ظ…ط±طھط¨ط©', 'image(s) from the sorted images'],
+  ['ط¬ط§ط±ظٹ ظپط­طµ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ...', 'Scanning receipts...'],
+  ['ظˆظ„ط§ ظٹظˆط¬ط¯ ظ…ظ„ظپ PDF ط¨ط§ط³ظ…', 'and there is no PDF file named'],
+  ['ظ„ظˆ ط§ظ„ظ…ط¨ظ„ط؛ طµط­ ط§ط¶ط؛ط· ط­ظپط¸', 'if the amount is correct, tap Save'],
+  ['ط¯ظ‡ ط¥ظٹطµط§ظ„ ط£ظ†ظ‡ظٹ ظ…ط§ظƒظٹظ†ط©طں', 'Which machine is this receipt for?'],
+  ['ط§ظ„ظ…ظ„ظپ ط§ظ„ط£طµظ„ظٹ ظ…ط´ ظ…ظˆط¬ظˆط¯', 'Original file not found'],
+  ['ظ…ط§ظƒظٹظ†ط§طھ ظ…ط§ ظˆطµظ„ط´ ظ…ظ„ظپظ‡ط§', 'Machines with no file received'],
+  ['طھط¹ط¯ظٹظ„ ط¨ظٹط§ظ†ط§طھ ط§ظ„ط¥ظٹطµط§ظ„', 'Edit receipt data'],
+  ['ط±ط§ط¬ط¹ظ‡ ظ…ظ† ط²ط± ط§ظ„ظ…ط±ط§ط¬ط¹ط©', 'review it using the review button'],
+  ['ط§ظ„ظ…طµط¯ط±: ط±ط¬ظˆط¹ ظ„ظˆط§طھط³ط§ط¨', 'Source: back to WhatsApp'],
+  ['ط¨ط¯ط، ط§ظ„ظ…ط¹ط§ظ„ط¬ط© ط§ظ„ط´ط§ظ…ظ„ط©', 'Run full processing'],
+  ['ط¨ظٹظ†ظ…ط§ ط£ط؛ظ„ط¨ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ', 'while most receipts are'],
+  ['ط§ظپطھط­ ط§ظ„ظپظˆظ„ط¯ط± ط¨ظˆط§ط³ط·ط©', 'Open folder with'],
+  ['ط§ظ„ظ…ط¨ظ„ط؛ ظٹط­طھط§ط¬ ظ…ط±ط§ط¬ط¹ط©', 'Amount needs review'],
+  ['ط¥ظٹطµط§ظ„ ظ…ظƒط±ط± ظ„ظ„ظ…ط§ظƒظٹظ†ط©', 'Duplicate receipt for machine'],
+  ['ظ…ظ‚ط¯ط±طھط´ ط£ط¯ظˆظ‘ط± ط§ظ„طµظˆط±ط©', 'Could not rotate the image'],
+  ['ط§طھط£ظƒط¯ ظ…ظ†ظ‡ ظˆط§ط¶ط؛ط· ط­ظپط¸', 'verify it and tap Save'],
+  ['ظ„ظ„ظ…ط±ط§ط¬ط¹ط© (ظ…ط´ ظ…ط¹ط¯ظˆط¯)', 'For review (not counted)'],
+  ['ط±ط§ط¬ط¹ظ‡ط§ ظ„ظˆ ط§ظ„ط¹ط¯ط¯ ظ…ظ‡ظ…', 'check them if the count matters'],
+  ['ط§ظ„ط¹ط¯: ط¯ظ‚ظٹظ‚ â†گ ط§ظ„ط³ط±ظٹط¹', 'Counting: precise, then fast'],
+  ['ظ…طھطµظپط­ ظ…ظ„ظپط§طھ ط§ظ„ظ†ط¸ط§ظ…', 'System file browser'],
+  ['ط­ظپط¸ ظˆطھط­ط¯ظٹط« ط§ظ„ظ…ظ„ظپط§طھ', 'Save and update files'],
+  ['ط¨ظ‚ط±ط£ طµظپط­ط§طھ ظ…ظ„ظپ PDF', 'Reading pages of PDF file'],
+  ['ط±ط§ط¬ط¹ ط§ظ„ظ…ط¨ظ„ط؛ ظٹط¯ظˆظٹط§ظ‹', 'check the amount manually'],
+  ['ط§ظ„ط¥ط®ط±ط§ط¬: ط§ظ„ط§ظپطھط±ط§ط¶ظٹ', 'Output: default'],
+  ['ط§ط®طھظٹط§ط± ظ‡ط°ط§ ط§ظ„ظپظˆظ„ط¯ط±', 'Choose this folder'],
+  ['ظ…ط³طھط¨ط¹ط¯ (ط¹ظ„ط§ظ…ط© ط؛ظ„ط·)', 'Excluded (marked wrong)'],
+  ['ط¹ط¯ط¯ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹:', 'Payment receipts count:'],
+  ['ط¥ظ„ط؛ط§ط، ط¹ظ„ط§ظ…ط© طµط­/ط؛ظ„ط·', 'Clear correct/wrong mark'],
+  ['ظ…ط´ ظ…ظˆط¬ظˆط¯ ظپظٹ ظپظˆظ„ط¯ط±', 'not found in folder'],
+  ['ط§ظ„ظˆط­ط¯ط© ط؛ظٹط± ظ…ط¹ط±ظˆظپط©', 'Unknown unit'],
+  ['ظپطھط­ ظپظˆظ„ط¯ط± ط§ظ„ط¥ط®ط±ط§ط¬', 'Open output folder'],
+  ['ط§ظ„طھط§ط±ظٹط® طµط­ - ط³ظٹط¨ظ‡', 'The date is correct - keep it'],
+  ['ظ…ط´ طھط¨ط¹ ظ†ظپط³ ط§ظ„ظٹظˆظ…:', 'Not from the same day:'],
+  ['ط¨ط³ ط§ظ„طھط³ظ…ظٹط© ظ…ط§ظƒظٹظ†ط©', 'but the naming says machine'],
+  ['ظ„ظˆط¬ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹', 'Payment receipts log'],
+  ['ط§ظ„ط£ظٹط§ظ… ط§ظ„ظ„ظٹ ظپط§طھطھ', 'previous days'],
+  ['طھظ… طھظˆظ„ظٹط¯ ط§ظ„ط¥ظƒط³ظٹظ„', 'Excel generated'],
+  ['ظ…ظ„ط§ط­ط¸ط§طھ ظ„ظ„ظ…ط±ط§ط¬ط¹ط©', 'Notes for review'],
+  ['ط§ظ„ظ…ط¨ظ„ط؛ ط؛ظٹط± ظ…ظ‚ط±ظˆط،', 'Amount unreadable'],
+  ['ظ…ط´ ط¨ط§طھط´ - طھط¬ط§ظ‡ظ„ظ‡', 'Not a batch - ignore it'],
+  ['ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„طھط§ظ†ظٹط©:', 'Second reading:'],
+  ['ط£ط±ظ‚ط§ظ… ظ…ط´ ظ„ط§ظ‚ظٹظ‡ط§:', 'Numbers not found:'],
+  ['ظ…ظ„ظپ ط¹ظ„ظ‰ ط¥ظ†ظ‡ظ… طµط­طں', 'file(s) as correct?'],
+  ['ظ…ظ„ظپ ظˆظ†طھظٹط¬ط© ط§ظ„ظپط­طµ', 'file(s) and the scan result'],
+  ['ط§طھط£ظƒط¯ ظ…ظ† ط§ظ„ظ…ط¨ظ„ط؛', 'check the amount'],
+  ['ظ…ظپظٹط´ ط­ط§ط¬ط© ظ„ظ„ظ…ط³ط­', 'Nothing to delete'],
+  ['ط§ظ„ظ…ط¨ظ„ط؛ ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ', 'Total amount'],
+  ['ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ ط§ظ„ط¹ط§ظ…:', 'Grand total:'],
+  ['ط§ظ„ظ…طµط¯ط±: ظ…ظ„ظپ PDF', 'Source: PDF file'],
+  ['ظˆط§طھط³ط§ط¨ (طھظ„ظ‚ط§ط¦ظٹ)', 'WhatsApp (auto)'],
+  ['ظˆط­ط¯ط© ط؛ظٹط± ظ…ط¹ط±ظˆظپط©', 'Unknown unit'],
+  ['ط¯ظ‡ ط¨ط§طھط´ - ط§ط¯ط®ظ„ظ‡', 'This is a batch - include it'],
+  ['ط§طھط¹ط±ظپطھ ظƒظ…ط§ظ† ظپظٹ:', 'also identified in:'],
+  ['ط§ظ„ط¹ط¯ ظ„ظ‚ظ‰ ظ…ط§ظƒظٹظ†ط©', 'Counting found machine'],
+  ['ط§ظ„ظ…ظ„ظپ ظ…ط´ ظ…ظˆط¬ظˆط¯', 'File not found'],
+  ['ظ…ظ„ظپ ظ…ظ† ط§ظ„ط¥ط®ط±ط§ط¬', 'file(s) from the output'],
+  ['طھظ‚ط±ظٹط± ط§ظ„ظ…ط±ط§ط¬ط¹ط©', 'Review report'],
+  ['ظپط´ظ„ ظ…ظ„ط، ط§ظ„ظ‚ط§ظ„ط¨', 'Failed to fill the template'],
+  ['ظ…ط§ظƒظٹظ†ط§طھ ظ†ط§ظ‚طµط©:', 'Missing machines:'],
+  ['ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط±', 'possible duplicate'],
+  ['ط±ط¬ظ‘ط¹ظ‡ (ط§ط­طھط³ط¨ظ‡)', 'Restore (count it)'],
+  ['ط§ظƒطھط¨ ظ…ط¨ظ„ط؛ طµط­ظٹط­', 'Enter a valid amount'],
+  ['ظ…ظƒط±ط± - ط§ط³طھط¨ط¹ط¯ظ‡', 'Duplicate - exclude it'],
+  ['ط§ط®طھط§ط± ط§ظ„ظ…ط§ظƒظٹظ†ط©', 'Select machine'],
+  ['ط§طھط³ظ…ظ‘ظ‰طŒ ط¥ط¬ظ…ط§ظ„ظٹ', 'named, total'],
+  ['طھط­ط¯ظٹط¯ ط§ظ„ظ…ط§ظƒظٹظ†ط©', 'Set machine'],
+  ['ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹', 'Payment receipts'],
+  ['ط¥ط¬ظ…ط§ظ„ظٹ ظ…ط§ظƒظٹظ†ط©', 'Total of machine'],
+  ['ط¨ط¹ظٹط¯ ط¹ظ† ظ…طھظˆط³ط·', 'is far from the average of'],
+  ['ظ…ط³طھط¨ط¹ط¯ (ظ…ظƒط±ط±)', 'Excluded (duplicate)'],
+  ['ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط©:', 'Machine number:'],
+  ['ظ…ط§ظƒظٹظ†ط§طھ ظ†ط§ظ‚طµط©', 'Missing machines'],
+  ['طھط§ط±ظٹط® ط§ظ„ط¥ظٹطµط§ظ„', 'Receipt date'],
+  ['ط§طھط³ظ…ظ‘ظ‰ ظ…ط§ظƒظٹظ†ط©', 'Named machine'],
+  ['ظ…ظ„ظپ ظ…ط³ظ…ظ‘ظ‰ ظ…ظ†:', 'named file(s) from:'],
+  ['ط§طھط³ظ…ظ‘ظ‰ ظˆط§طھظ†ط³ط®', 'named and copied'],
+  ['طھط¹ط±ظٹظپ ط§ظ„ظ…ظ„ظپط§طھ', 'Identifying files'],
+  ['ط¹ط¯ظ‘ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ', 'Counting receipts'],
+  ['ظ‚ط±ط§ط،ط© طھط§ظ†ظٹط©:', 'Second reading:'],
+  ['ظپط´ظ„طھ ط§ظ„ظ‚ط±ط§ط،ط©', 'read failed'],
+  ['ظ†ظپط³ ط§ظ„ظ…ط§ظƒظٹظ†ط©', 'Same machine'],
+  ['ظ…ط³طھظ†ط¯ ظ…طھط¬ط§ظ‡ظ„', 'Ignored document'],
+  ['ط§ط®طھظٹط§ط± ظپظˆظ„ط¯ط±', 'Choose folder'],
+  ['ظپط´ظ„ ط§ظ„طھط³ظ…ظٹط©:', 'Naming failed:'],
+  ['طھظ…طھ ط§ظ„طھط³ظ…ظٹط©:', 'Naming done:'],
+  ['ظپط´ظ„ ط§ظ„طھط¹ط±ظٹظپ:', 'Identification failed:'],
+  ['ظ†ط§ظ‚طµ ط§ظ„ظ‚ط±ط§ط،ط©', 'partial read'],
+  ['ظ„ظˆط¬ ط§ظ„طھظ‚ظپظٹظ„', 'Closing log'],
+  ['طھط§ط±ظٹط® ظ…ط®طھظ„ظپ', 'Different date'],
+  ['ط§ظ†طھظ‡ظ‰ ط§ظ„ظپط­طµ', 'Scan finished'],
+  ['ظˆظ†ظپط³ ط§ظ„ظ…ط¨ظ„ط؛', 'and the same amount'],
+  ['ط±ط§ط¬ط¹ ط§ظ„طµظˆط±ط©', 'check the image'],
+  ['ط®ظ„ظٹظ‡ ط¨طھط§ط±ظٹط®', 'Set it to date'],
+  ['ط­ظپط¸ ظˆط§ظ„طھط§ظ„ظٹ', 'Save & next'],
+  ['ط§طھظˆظ‚ظپ. ظپط§ط¶ظ„', 'Stopped. Remaining'],
+  ['ط§ظƒطھظ…ظ„ ط§ظ„ط¹ط¯:', 'Counting complete:'],
+  ['ط¥ط±ط³ط§ظ„ ط§ظ„ظ…ظ„ظپ', 'Send file'],
+  ['طھط؛ظٹظٹط± ط§ظ„ظ„ط؛ط©', 'Change language'],
+  ['ط§ظ„ط¥ط³ظƒظ†ط¯ط±ظٹط©', 'Alexandria'],
+  ['ظ…ظ„ط، ط§ظ„ط´ط§ط´ط©', 'Full screen'],
+  ['ط¨ط³ ط§ظ„طھط³ظ„ط³ظ„', 'but the sequence'],
+  ['ط¢ط®ط± ظ†طھظٹط¬ط©:', 'Last result:'],
+  ['ظپط­طµ ظˆطھط³ظ…ظٹط©', 'Scan & name'],
+  ['ط¥ط±ط³ط§ظ„ ط§ظ„ظƒظ„', 'Send all'],
+  ['ط§طھط±ط§ط¬ط¹: طµط­', 'Reviewed: correct'],
+  ['ط¥ط¹ط§ط¯ط© ط§ظ„ط¹ط¯', 'Recount'],
+  ['ظ…ط®طھظ„ظپط© ط¹ظ†', 'differs from'],
+  ['ط§طھط£ظƒط¯ ظ…ظ†ظ‡', 'verify it'],
+  ['ط؛ظٹط± ظ…ظ‚ط±ظˆط،', 'unreadable'],
+  ['ط§ظ„ط¨ط§ظ‚ظٹ طµط­', 'The rest are correct'],
+  ['ظ…ط³ط­ ط§ظ„ظƒظ„', 'Delete all'],
+  ['ط؛ظٹط± ظ…ط­ط¯ط¯', 'Unspecified'],
+  ['ظ„ظ„ظ…ط±ط§ط¬ط¹ط©', 'for review'],
+  ['ط§ظ„ظ…ط§ظƒظٹظ†ط©', 'Machine'],
+  ['ط§ظ„ظ…ظ‚ط±ظˆط،:', 'Read:'],
+  ['ط§ط³طھط®ط¯ظ…ظ‡ط§', 'Use it'],
+  ['ظپط´ظ„ ط§ظ„ط¹ط¯', 'Counting failed'],
+  ['ط¹ط¯ظ‘ ط³ط±ظٹط¹', 'Quick count'],
+  ['ط¨ط¯ط، ط§ظ„ط¹ط¯', 'Start counting'],
+  ['ط§ظ„طھظ‚ظپظٹظ„', 'Closing'],
+  ['ظ…ط§ظƒظٹظ†ط§طھ', 'Machines'],
+  ['ظˆط§ظ„ط£ط؛ظ„ط¨', 'while most are'],
+  ['ط§ظ„ظ…ط¨ظ„ط؛:', 'Amount:'],
+  ['ط§ظ„ط¥طµط¯ط§ط±', 'Version'],
+  ['ط§ظپطھط±ط§ط¶ظٹ', 'default'],
+  ['ط§ظ„طھط³ظ„ط³ظ„', 'Sequence'],
+  ['ط§ظ„ظپطھط±ط©', 'Period'],
+  ['ظ‡طھطھظ…ط³ط­', 'Will delete'],
+  ['طھظ… ظ…ط³ط­', 'Deleted'],
+  ['ظ…ط§ظƒظٹظ†ط©', 'Machine'],
+  ['ط§ظƒطھظ…ظ„!', 'Done!'],
+  ['ط¨ط§طھط´ط§طھ', 'batches'],
+  ['طھط§ط±ظٹط®ظ‡', 'Date'],
+  ['ظ…ط³طھط¨ط¹ط¯', 'Excluded'],
+  ['طھظ… ظپط­طµ', 'Scanned'],
+  ['ط¨طھط§ط±ظٹط®', 'dated'],
+  ['ظ‡طھط¹ظ„ظ‘ظ…', 'Mark'],
+  ['ظ‡ظٹطھظ…ط³ط­', 'Will delete'],
+  ['ط§ظ„ط£طµظ„:', 'Original:'],
+  ['ط§طھط³ظ…ظ‘ظ‰', 'named'],
+  ['ظ…ط±ط§ط¬ط¹ط©', 'Review'],
+  ['ظ…ظ„ظپط§طھ', 'files'],
+  ['ط¥ظٹطµط§ظ„', 'receipt(s)'],
+  ['طµظپط­ط§طھ', 'pages'],
+  ['ط§ظ„ط¹ط¯ط¯', 'Count'],
+  ['ظ…ظ‚ط±ظˆط،', 'read'],
+  ['ط£ظٹط§ظ…', 'days'],
+  ['ظ‚ط§ظ„ط¨', 'Template'],
+  ['ط¨ط§طھط´', 'batch'],
+  ['ظ†ط§ظ‚طµ', 'missing'],
+  ['طµظپط­ط©', 'page(s)'],
+  ['طµظˆط±ط©', 'image(s)'],
+  ['ظپط§ط¶ظ„', 'remaining'],
+  ['ط±ط§ط¬ط¹', 'review'],
+  ['ط§ظ„ظƒظ„', 'All'],
+  ['ظƒط§ظ…ظ„', 'full'],
+  ['ظ…ظ„ظپ', 'file(s)'],
+  ['ط¬.ظ…', 'EGP'],
+  ['ظپط­طµ', 'Scan'],
+  ['ظپظٹظ‡', 'There are'],
+  ['ظ„ط³ظ‡', 'yet'],
+  ['ط£ظˆ', 'or'],
+  ['ظˆ', 'and']
 ];
 
-// ───────────────────── ألوان تتأقلم مع الدارك مود ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط£ظ„ظˆط§ظ† طھطھط£ظ‚ظ„ظ… ظ…ط¹ ط§ظ„ط¯ط§ط±ظƒ ظ…ظˆط¯ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 bool _isDark(BuildContext c) => Theme.of(c).brightness == Brightness.dark;
 
 Color _tintBg(BuildContext c, MaterialColor m, {bool soft = false, bool strong = false}) {
@@ -1038,7 +1264,7 @@ Color _tintBg(BuildContext c, MaterialColor m, {bool soft = false, bool strong =
 Color _tintBorder(BuildContext c, MaterialColor m) => _isDark(c) ? m.shade300 : m.shade800;
 Color _tintFg(BuildContext c, MaterialColor m) => _isDark(c) ? m.shade200 : m.shade900;
 
-// ───────────────────── الهيدر: اسم التطبيق + زراير اللغة والدارك ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط§ظ„ظ‡ظٹط¯ط±: ط§ط³ظ… ط§ظ„طھط·ط¨ظٹظ‚ + ط²ط±ط§ظٹط± ط§ظ„ظ„ط؛ط© ظˆط§ظ„ط¯ط§ط±ظƒ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class AppTitle extends StatelessWidget {
   const AppTitle({super.key});
 
@@ -1064,7 +1290,7 @@ class AppTitle extends StatelessWidget {
   }
 }
 
-// على الشاشات العريضة: أيقونة منفصلة. على الصغيرة: بتتنقل لقايمة "المزيد" (بند "المظهر واللغة").
+// ط¹ظ„ظ‰ ط§ظ„ط´ط§ط´ط§طھ ط§ظ„ط¹ط±ظٹط¶ط©: ط£ظٹظ‚ظˆظ†ط© ظ…ظ†ظپطµظ„ط©. ط¹ظ„ظ‰ ط§ظ„طµط؛ظٹط±ط©: ط¨طھطھظ†ظ‚ظ„ ظ„ظ‚ط§ظٹظ…ط© "ط§ظ„ظ…ط²ظٹط¯" (ط¨ظ†ط¯ "ط§ظ„ظ…ط¸ظ‡ط± ظˆط§ظ„ظ„ط؛ط©").
 class HeaderButtons extends StatelessWidget {
   const HeaderButtons({super.key});
 
@@ -1073,7 +1299,7 @@ class HeaderButtons extends StatelessWidget {
     if (MediaQuery.sizeOf(context).width < 400) return const SizedBox.shrink();
     final ar = AppSettings.of(context).isAr;
     return IconButton(
-      tooltip: ar ? 'المظهر واللغة' : 'Theme & language',
+      tooltip: ar ? 'ط§ظ„ظ…ط¸ظ‡ط± ظˆط§ظ„ظ„ط؛ط©' : 'Theme & language',
       icon: Icon(_isDark(context) ? Icons.dark_mode : Icons.palette_outlined),
       onPressed: () => showAppearanceSheet(context),
     );
@@ -1109,41 +1335,41 @@ class _AppearanceSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            label(ar ? 'اللغة' : 'Language'),
+            label(ar ? 'ط§ظ„ظ„ط؛ط©' : 'Language'),
             SegmentedButton<String>(
               showSelectedIcon: false,
               segments: [
-                ButtonSegment<String>(value: 'sys', label: w.Text(ar ? 'تلقائي' : 'Auto')),
-                const ButtonSegment<String>(value: 'ar', label: w.Text('العربية')),
+                ButtonSegment<String>(value: 'sys', label: w.Text(ar ? 'طھظ„ظ‚ط§ط¦ظٹ' : 'Auto')),
+                const ButtonSegment<String>(value: 'ar', label: w.Text('ط§ظ„ط¹ط±ط¨ظٹط©')),
                 const ButtonSegment<String>(value: 'en', label: w.Text('English')),
               ],
               selected: {s.langCode ?? 'sys'},
               onSelectionChanged: (v) => s.setLang(v.first == 'sys' ? null : v.first),
             ),
-            label(ar ? 'المظهر' : 'Theme'),
+            label(ar ? 'ط§ظ„ظ…ط¸ظ‡ط±' : 'Theme'),
             SegmentedButton<ThemeMode>(
               showSelectedIcon: false,
               segments: [
                 ButtonSegment<ThemeMode>(
                   value: ThemeMode.system,
                   icon: const Icon(Icons.brightness_auto, size: 18),
-                  label: w.Text(ar ? 'تلقائي' : 'Auto'),
+                  label: w.Text(ar ? 'طھظ„ظ‚ط§ط¦ظٹ' : 'Auto'),
                 ),
                 ButtonSegment<ThemeMode>(
                   value: ThemeMode.light,
                   icon: const Icon(Icons.light_mode, size: 18),
-                  label: w.Text(ar ? 'فاتح' : 'Light'),
+                  label: w.Text(ar ? 'ظپط§طھط­' : 'Light'),
                 ),
                 ButtonSegment<ThemeMode>(
                   value: ThemeMode.dark,
                   icon: const Icon(Icons.dark_mode, size: 18),
-                  label: w.Text(ar ? 'داكن' : 'Dark'),
+                  label: w.Text(ar ? 'ط¯ط§ظƒظ†' : 'Dark'),
                 ),
               ],
               selected: {s.themeMode},
               onSelectionChanged: (v) => s.setMode(v.first),
             ),
-            label(ar ? 'لون التطبيق' : 'Accent color'),
+            label(ar ? 'ظ„ظˆظ† ط§ظ„طھط·ط¨ظٹظ‚' : 'Accent color'),
             Wrap(
               spacing: 12,
               runSpacing: 12,
@@ -1180,7 +1406,7 @@ class _AppearanceSheet extends StatelessWidget {
   }
 }
 
-// ───────────────────── جداول الماكينات والوحدات ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط¬ط¯ط§ظˆظ„ ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ ظˆط§ظ„ظˆط­ط¯ط§طھ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class TerminalInfo {
   final int orderNum;
   final int excelRow;
@@ -1188,7 +1414,7 @@ class TerminalInfo {
   const TerminalInfo(this.orderNum, this.excelRow, this.unitName);
 }
 
-// النسخة العامة: مفيش ماكينات ولا وحدات مكتوبة في الكود. كله بيتقرأ من ملف A2R_Settings.xlsx
+// ط§ظ„ظ†ط³ط®ط© ط§ظ„ط¹ط§ظ…ط©: ظ…ظپظٹط´ ظ…ط§ظƒظٹظ†ط§طھ ظˆظ„ط§ ظˆط­ط¯ط§طھ ظ…ظƒطھظˆط¨ط© ظپظٹ ط§ظ„ظƒظˆط¯. ظƒظ„ظ‡ ط¨ظٹطھظ‚ط±ط£ ظ…ظ† ظ…ظ„ظپ A2R_Settings.xlsx
 final Map<String, TerminalInfo> terminals = {};
 final Map<int, String> numToTid = {};
 final Map<String, String> tidFix = {};
@@ -1197,7 +1423,7 @@ final Map<String, int> merchantCodeMap = {};
 final List<MapEntry<List<String>, int>> nameHints = [];
 final Map<int, String> rowNames = {};
 
-// بيبني الفهارس (رقم الماكينة -> TID ، رقم الصف -> اسم الوحدة) من الماكينات المحمّلة
+// ط¨ظٹط¨ظ†ظٹ ط§ظ„ظپظ‡ط§ط±ط³ (ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط© -> TID طŒ ط±ظ‚ظ… ط§ظ„طµظپ -> ط§ط³ظ… ط§ظ„ظˆط­ط¯ط©) ظ…ظ† ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ ط§ظ„ظ…ط­ظ…ظ‘ظ„ط©
 void rebuildTerminalIndexes() {
   numToTid.clear();
   rowNames.clear();
@@ -1211,10 +1437,10 @@ List<int> machineNums() => numToTid.keys.toList()..sort();
 
 String machineLabel(int i) {
   final t = terminals[numToTid[i]];
-  return 'ماكينة $i${t == null || t.unitName.isEmpty ? '' : ' - ${t.unitName}'}';
+  return 'ظ…ط§ظƒظٹظ†ط© $i${t == null || t.unitName.isEmpty ? '' : ' - ${t.unitName}'}';
 }
 
-// ───────────────────── خوارزميات الاستخراج (منقولة من نسخة البايثون) ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط®ظˆط§ط±ط²ظ…ظٹط§طھ ط§ظ„ط§ط³طھط®ط±ط§ط¬ (ظ…ظ†ظ‚ظˆظ„ط© ظ…ظ† ظ†ط³ط®ط© ط§ظ„ط¨ط§ظٹط«ظˆظ†) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 final List<RegExp> _markers = [
   RegExp(r'TERMINAL', caseSensitive: false),
   RegExp(r'GRAND|TOTALS?', caseSensitive: false),
@@ -1230,7 +1456,7 @@ final List<RegExp> _markers = [
 
 int receiptScore(String text) => _markers.where((r) => r.hasMatch(text)).length;
 
-// سطر نص مع مكانه في الصورة
+// ط³ط·ط± ظ†طµ ظ…ط¹ ظ…ظƒط§ظ†ظ‡ ظپظٹ ط§ظ„طµظˆط±ط©
 class OcrLine {
   final String text;
   final double left, right, top, bottom;
@@ -1252,7 +1478,7 @@ List<OcrLine> toLines(RecognizedText res) {
   return out;
 }
 
-// يرتب النص صفوف (الاسم يمين والرقم جنبه في نفس السطر) زي Tesseract بالظبط
+// ظٹط±طھط¨ ط§ظ„ظ†طµ طµظپظˆظپ (ط§ظ„ط§ط³ظ… ظٹظ…ظٹظ† ظˆط§ظ„ط±ظ‚ظ… ط¬ظ†ط¨ظ‡ ظپظٹ ظ†ظپط³ ط§ظ„ط³ط·ط±) ط²ظٹ Tesseract ط¨ط§ظ„ط¸ط¨ط·
 String rowsText(List<OcrLine> lines) {
   final ls = [...lines]..sort((a, b) => a.cy.compareTo(b.cy));
   final rows = <List<OcrLine>>[];
@@ -1278,7 +1504,7 @@ String rowsText(List<OcrLine> lines) {
 
 String readingText(List<OcrLine> lines) => lines.map((e) => e.text).join('\n');
 
-// صورة فيها أكتر من إيصال جنب بعض -> نقسمها لأعمدة
+// طµظˆط±ط© ظپظٹظ‡ط§ ط£ظƒطھط± ظ…ظ† ط¥ظٹطµط§ظ„ ط¬ظ†ط¨ ط¨ط¹ط¶ -> ظ†ظ‚ط³ظ…ظ‡ط§ ظ„ط£ط¹ظ…ط¯ط©
 List<List<OcrLine>> splitColumns(List<OcrLine> lines) {
   if (lines.length < 8) return [lines];
   final minL = lines.map((e) => e.left).reduce(math.min);
@@ -1312,7 +1538,7 @@ List<List<OcrLine>> splitColumns(List<OcrLine> lines) {
   return [lines];
 }
 
-// ───────────── المبالغ ─────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط§ظ„ظ…ط¨ط§ظ„ط؛ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 final RegExp _amountRe =
     RegExp(r"(?<![\d,.])(\d{1,3}(?:,\d{3})*|\d+)[., ](\d{2})(?!\d)");
 final RegExp _brandRe = RegExp(
@@ -1389,14 +1615,14 @@ class Decision {
 }
 
 Decision decide(List<Parsed> results) {
-  // 1) تطابق تام بين مجموع الكروت و GRAND TOTALS
+  // 1) طھط·ط§ط¨ظ‚ طھط§ظ… ط¨ظٹظ† ظ…ط¬ظ…ظˆط¹ ط§ظ„ظƒط±ظˆطھ ظˆ GRAND TOTALS
   for (final r in results) {
     final b = r.bsum;
     if (b != null && b > 0 && r.grand.any((g) => (g - b).abs() < 0.005)) {
       return Decision(b, true);
     }
   }
-  // 2) فرق رقم واحد
+  // 2) ظپط±ظ‚ ط±ظ‚ظ… ظˆط§ط­ط¯
   for (final r in results) {
     final b = r.bsum;
     if (b != null && b > 0 && r.bvals.length >= 2) {
@@ -1412,12 +1638,12 @@ Decision decide(List<Parsed> results) {
       }
     }
   }
-  // 3) إجمالي مكرر
+  // 3) ط¥ط¬ظ…ط§ظ„ظٹ ظ…ظƒط±ط±
   for (final r in results) {
     final c = mostCommon(r.grand);
     if (c != null && c.value >= 2 && r.bsum == null) return Decision(c.key, false);
   }
-  // 4) تصويت
+  // 4) طھطµظˆظٹطھ
   final pool = <double>[];
   for (final r in results) {
     pool.addAll(r.grand);
@@ -1436,7 +1662,7 @@ class PieceResult {
   PieceResult(this.texts, this.val, this.ok);
 }
 
-// إيصال دفع (RRN / رقم كارت مخفي / Approved ...) ولا باتش كلوز / ملخص / ري برنت؟
+// ط¥ظٹطµط§ظ„ ط¯ظپط¹ (RRN / ط±ظ‚ظ… ظƒط§ط±طھ ظ…ط®ظپظٹ / Approved ...) ظˆظ„ط§ ط¨ط§طھط´ ظƒظ„ظˆط² / ظ…ظ„ط®طµ / ط±ظٹ ط¨ط±ظ†طھطں
 String classifyReceipt(String text) {
   final up = text.toUpperCase();
   final payRes = <RegExp>[
@@ -1464,7 +1690,7 @@ String classifyReceipt(String text) {
   return 'other';
 }
 
-// لو GRAND TOTAL = مجموع إجماليات الكروت (حتى لو أسماء الكروت اتقرت غلط): نرجّعه مؤكد.
+// ظ„ظˆ GRAND TOTAL = ظ…ط¬ظ…ظˆط¹ ط¥ط¬ظ…ط§ظ„ظٹط§طھ ط§ظ„ظƒط±ظˆطھ (ط­طھظ‰ ظ„ظˆ ط£ط³ظ…ط§ط، ط§ظ„ظƒط±ظˆطھ ط§طھظ‚ط±طھ ط؛ظ„ط·): ظ†ط±ط¬ظ‘ط¹ظ‡ ظ…ط¤ظƒط¯.
 double? sumClosure(List<String> texts) {
   final cnt = <double, int>{};
   for (final t in texts) {
@@ -1518,7 +1744,7 @@ String? batchNo(List<String> texts) {
   return mostCommon(all)?.key;
 }
 
-// ───────────── الماكينة / الوحدة / التاريخ ─────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط§ظ„ظ…ط§ظƒظٹظ†ط© / ط§ظ„ظˆط­ط¯ط© / ط§ظ„طھط§ط±ظٹط® â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 String? _tidLabeledRaw(String t) {
   final m = RegExp(r"TERMINAL\s*(?:ID)?\D{0,15}?(\d[\d\s/]{6,9}\d)",
           caseSensitive: false)
@@ -1535,7 +1761,7 @@ String? _tidLabeled(String t) {
   return d != null && terminals.containsKey(d) ? d : null;
 }
 
-// ───────────── تعلّم الماكينات والوحدات من الإيصالات ─────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ طھط¹ظ„ظ‘ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ ظˆط§ظ„ظˆط­ط¯ط§طھ ظ…ظ† ط§ظ„ط¥ظٹطµط§ظ„ط§طھ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 int _editDistance(String a, String b) {
   if (a == b) return 0;
   if (a.isEmpty) return b.length;
@@ -1566,7 +1792,7 @@ String? _cleanUnitName(String raw) {
   return s.length > 40 ? s.substring(0, 40).trim() : s;
 }
 
-// اسم الوحدة المكتوب على الإيصال: بعد كلمة MERCHANT NAME لو موجودة، وإلا أول سطر اسم في أعلى الإيصال
+// ط§ط³ظ… ط§ظ„ظˆط­ط¯ط© ط§ظ„ظ…ظƒطھظˆط¨ ط¹ظ„ظ‰ ط§ظ„ط¥ظٹطµط§ظ„: ط¨ط¹ط¯ ظƒظ„ظ…ط© MERCHANT NAME ظ„ظˆ ظ…ظˆط¬ظˆط¯ط©طŒ ظˆط¥ظ„ط§ ط£ظˆظ„ ط³ط·ط± ط§ط³ظ… ظپظٹ ط£ط¹ظ„ظ‰ ط§ظ„ط¥ظٹطµط§ظ„
 String? extractUnitName(List<String> texts) {
   final label = RegExp(r'MERCHANT\s*NAME\s*[:\-]?\s*(.+)', caseSensitive: false);
   for (final t in texts) {
@@ -1610,7 +1836,7 @@ int _rowForUnitName(String name) {
   return mxRow + 1;
 }
 
-// ماكينة جديدة مكتوبة على الإيصال (Terminal ID) ومش في القايمة: بنسجّلها هي ووحدتها وبنحفظها في ملف الإعدادات
+// ظ…ط§ظƒظٹظ†ط© ط¬ط¯ظٹط¯ط© ظ…ظƒطھظˆط¨ط© ط¹ظ„ظ‰ ط§ظ„ط¥ظٹطµط§ظ„ (Terminal ID) ظˆظ…ط´ ظپظٹ ط§ظ„ظ‚ط§ظٹظ…ط©: ط¨ظ†ط³ط¬ظ‘ظ„ظ‡ط§ ظ‡ظٹ ظˆظˆط­ط¯طھظ‡ط§ ظˆط¨ظ†ط­ظپط¸ظ‡ط§ ظپظٹ ظ…ظ„ظپ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ
 String? discoverTerminal(List<String> texts) {
   final counts = <String, int>{};
   for (final t in texts) {
@@ -1693,10 +1919,6 @@ int? findUnitExtraIn(List<String> texts) {
       t.replaceAll(RegExp(r'\D'), ''),
     ];
     for (final d in cands) {
-      final mm = RegExp(r"11470?(2[2-9]|3[01])084").firstMatch(d);
-      if (mm != null && merchantCodeMap.containsKey(mm.group(1))) {
-        return merchantCodeMap[mm.group(1)];
-      }
       for (final e in merchantCodeMap.entries) {
         if (e.key.length >= 6 && d.contains(e.key)) return e.value;
       }
@@ -1725,6 +1947,42 @@ String? findDateIn(List<String> texts) {
   return null;
 }
 
+// ط¹ط¯ط¯ ظ…ط¹ط§ظ…ظ„ط§طھ ط§ظ„ط¨ط§طھط´ ظ…ظ† ط¥ظٹطµط§ظ„ ط§ظ„ط¥ظ‚ظپط§ظ„: "GRAND TOTALS / Sale (010)" (ظˆظ„ظˆ ط§طھظ‚ط±ط§ ظ…ط¬ظ…ظˆط¹ ط§ظ„ظƒط±ظˆطھ ط¨ظٹطھط·ط§ط¨ظ‚ ظ…ط¹ط§ظ‡)
+int? _txnNum(String s) {
+  final t = s.trim().replaceAll(RegExp(r'[Oo]'), '0').replaceAll(RegExp(r'[Il|]'), '1');
+  return int.tryParse(t);
+}
+
+int? batchTxnOf(List<String> texts) {
+  final grandRe = RegExp(r'GRAND|TOTALS', caseSensitive: false);
+  final paren = RegExp(r'\(\s*([0-9OoIl|]{1,5})\s*\)');
+  final grands = <int>[];
+  final sums = <int>[];
+  for (final raw in texts) {
+    final gm = grandRe.firstMatch(raw);
+    if (gm != null) {
+      final m = paren.firstMatch(raw.substring(gm.start));
+      final v = m == null ? null : _txnNum(m.group(1)!);
+      if (v != null && v > 0 && v < 100000) grands.add(v);
+    }
+    final pre = gm != null ? raw.substring(0, gm.start) : raw;
+    var sum = 0, n = 0;
+    for (final m in RegExp(r'TOTAL(?!\s*NET)[^()\n]{0,12}\(\s*([0-9OoIl|]{1,5})\s*\)', caseSensitive: false)
+        .allMatches(pre)) {
+      final v = _txnNum(m.group(1)!);
+      if (v != null) {
+        sum += v;
+        n++;
+      }
+    }
+    if (n > 0 && sum > 0) sums.add(sum);
+  }
+  final g = mostCommon(grands)?.key;
+  final s = mostCommon(sums)?.key;
+  if (g != null && s != null && g != s) return null; // ط§ظ„ظ‚ط±ط§ط،طھظٹظ† ظ…طھط¹ط§ط±ط¶طھظٹظ†: ط§ظ„ط£ظپط¶ظ„ طھظƒطھط¨ظ‡ ط¨ط¥ظٹط¯ظƒ
+  return g ?? s;
+}
+
 class Analysis {
   String? tid;
   String how;
@@ -1735,16 +1993,18 @@ class Analysis {
   List<double> batches;
   String? date;
   String debug = '';
+  int? txn; // ط¹ط¯ط¯ ظ…ط¹ط§ظ…ظ„ط§طھ ط§ظ„ط¨ط§طھط´ (ظ…ظ† ط¥ظٹطµط§ظ„ ط§ظ„ط¥ظ‚ظپط§ظ„)
   Analysis(this.tid, this.how, this.row, this.unitName, this.val, this.ok,
       this.batches, this.date);
 }
 
-// تحليل صورة كاملة (ممكن فيها أكتر من إيصال)
+// طھط­ظ„ظٹظ„ طµظˆط±ط© ظƒط§ظ…ظ„ط© (ظ…ظ…ظƒظ† ظپظٹظ‡ط§ ط£ظƒطھط± ظ…ظ† ط¥ظٹطµط§ظ„)
 Analysis analyzeLines(List<OcrLine> all) {
   final pieces = splitColumns(all);
   final multi = pieces.length > 1;
   final allTexts = <String>[];
   final batches = <double>[];
+  final txns = <int?>[];
   var allOk = true;
   final seen = <String>{};
 
@@ -1761,15 +2021,16 @@ Analysis analyzeLines(List<OcrLine> all) {
     }
     final b = batchNo(r.texts);
     final key = '$b|${r.val}';
-    if (b != null && seen.contains(key)) continue; // نفس الباتش اتصور مرتين
+    if (b != null && seen.contains(key)) continue; // ظ†ظپط³ ط§ظ„ط¨ط§طھط´ ط§طھطµظˆط± ظ…ط±طھظٹظ†
     seen.add(key);
     batches.add(r.val);
+    txns.add(batchTxnOf(r.texts));
     allOk = allOk && r.ok;
   }
   var total = round2(batches.fold(0.0, (a, b) => a + b));
   var ok = allOk && batches.isNotEmpty;
 
-  // شبكة أمان: لو التقسيم مش مؤكد جرّب الصورة كلها
+  // ط´ط¨ظƒط© ط£ظ…ط§ظ†: ظ„ظˆ ط§ظ„طھظ‚ط³ظٹظ… ظ…ط´ ظ…ط¤ظƒط¯ ط¬ط±ظ‘ط¨ ط§ظ„طµظˆط±ط© ظƒظ„ظ‡ط§
   if (multi && !ok) {
     final r = ocrPiece(all);
     allTexts.addAll(r.texts);
@@ -1779,6 +2040,9 @@ Analysis analyzeLines(List<OcrLine> all) {
       batches
         ..clear()
         ..add(r.val);
+      txns
+        ..clear()
+        ..add(batchTxnOf(r.texts));
     }
   }
 
@@ -1808,13 +2072,14 @@ Analysis analyzeLines(List<OcrLine> all) {
   }
   final result = Analysis(tid, how, row, name, total, ok, batches, date);
   result.debug = dbg.toString();
+  result.txn = (txns.isNotEmpty && txns.every((e) => e != null)) ? txns.fold<int>(0, (a, e) => a + e!) : null;
   return result;
 }
 
 double round2(double val) => double.parse(val.toStringAsFixed(2));
 
-// دمج القراءة التانية (الصورة المحسّنة) في القراءة الأولى.
-// بترجع قيمة المبلغ التانية لو متعارضة مع الأولى (علشان تتراجع)، وإلا null.
+// ط¯ظ…ط¬ ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„طھط§ظ†ظٹط© (ط§ظ„طµظˆط±ط© ط§ظ„ظ…ط­ط³ظ‘ظ†ط©) ظپظٹ ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„ط£ظˆظ„ظ‰.
+// ط¨طھط±ط¬ط¹ ظ‚ظٹظ…ط© ط§ظ„ظ…ط¨ظ„ط؛ ط§ظ„طھط§ظ†ظٹط© ظ„ظˆ ظ…طھط¹ط§ط±ط¶ط© ظ…ط¹ ط§ظ„ط£ظˆظ„ظ‰ (ط¹ظ„ط´ط§ظ† طھطھط±ط§ط¬ط¹)طŒ ظˆط¥ظ„ط§ null.
 double? mergeSecondRead(Analysis a, Analysis b) {
   if (a.tid == null && b.tid != null) {
     a.tid = b.tid;
@@ -1827,27 +2092,30 @@ double? mergeSecondRead(Analysis a, Analysis b) {
     a.how = b.how;
   }
   a.date ??= b.date;
+  a.txn ??= b.txn;
   if (b.val <= 0) return null;
   if (a.val <= 0) {
     a.val = b.val;
     a.ok = b.ok;
     a.batches = [...b.batches];
+    a.txn = b.txn ?? a.txn;
     return null;
   }
-  if ((a.val - b.val).abs() < 0.005) return null; // القراءتين متطابقتين
+  if ((a.val - b.val).abs() < 0.005) return null; // ط§ظ„ظ‚ط±ط§ط،طھظٹظ† ظ…طھط·ط§ط¨ظ‚طھظٹظ†
   if (!a.ok && b.ok) {
-    // الأولى مش مؤكدة والتانية مؤكدة بمجموع الكروت -> نعتمد التانية
+    // ط§ظ„ط£ظˆظ„ظ‰ ظ…ط´ ظ…ط¤ظƒط¯ط© ظˆط§ظ„طھط§ظ†ظٹط© ظ…ط¤ظƒط¯ط© ط¨ظ…ط¬ظ…ظˆط¹ ط§ظ„ظƒط±ظˆطھ -> ظ†ط¹طھظ…ط¯ ط§ظ„طھط§ظ†ظٹط©
     a.val = b.val;
     a.ok = true;
     a.batches = [...b.batches];
+    a.txn = b.txn ?? a.txn;
     return null;
   }
-  if (a.ok && !b.ok) return null; // الأولى مؤكدة، نتجاهل التانية
-  a.ok = false; // قراءتين مختلفتين: لازم مراجعة
+  if (a.ok && !b.ok) return null; // ط§ظ„ط£ظˆظ„ظ‰ ظ…ط¤ظƒط¯ط©طŒ ظ†طھط¬ط§ظ‡ظ„ ط§ظ„طھط§ظ†ظٹط©
+  a.ok = false; // ظ‚ط±ط§ط،طھظٹظ† ظ…ط®طھظ„ظپطھظٹظ†: ظ„ط§ط²ظ… ظ…ط±ط§ط¬ط¹ط©
   return b.val;
 }
 
-// بيحوّل صفحات ملف PDF لصور PNG (بيستخدم في حالة مفيش صور)
+// ط¨ظٹط­ظˆظ‘ظ„ طµظپط­ط§طھ ظ…ظ„ظپ PDF ظ„طµظˆط± PNG (ط¨ظٹط³طھط®ط¯ظ… ظپظٹ ط­ط§ظ„ط© ظ…ظپظٹط´ طµظˆط±)
 Future<List<File>> extractPdfPages(File pdf) async {
   final out = <File>[];
   try {
@@ -1865,11 +2133,11 @@ Future<List<File>> extractPdfPages(File pdf) async {
   return out;
 }
 
-// ───────────────────── مسارات المجلدات ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ظ…ط³ط§ط±ط§طھ ط§ظ„ظ…ط¬ظ„ط¯ط§طھ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const String root = '/storage/emulated/0';
 final String baseDir = '$root/A2R-POS-Public';
 final String rawImagesDir = '$baseDir/raw_images';
-String outputDir = '$baseDir'; // ممكن المستخدم يغيّره من الشاشة
+String outputDir = '$baseDir'; // ظ…ظ…ظƒظ† ط§ظ„ظ…ط³طھط®ط¯ظ… ظٹط؛ظٹظ‘ط±ظ‡ ظ…ظ† ط§ظ„ط´ط§ط´ط©
 final String defaultOutputDir = '$baseDir';
 final String tmpDir = '$baseDir/.tmp';
 final String cfgPath = '$baseDir/.app_cfg.json';
@@ -1969,8 +2237,8 @@ void saveOutDir(String? f) {
   _writeCfg(m);
 }
 
-// ───────────────── معالجة الصور (تدوير / تحسين) - بتشتغل في Isolate ─────────────────
-// بتصلّح اتجاه الـ EXIF وبتدوّر الصورة لو deg != 0. بترجع true لو كتبت ملف جديد.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ظ…ط¹ط§ظ„ط¬ط© ط§ظ„طµظˆط± (طھط¯ظˆظٹط± / طھط­ط³ظٹظ†) - ط¨طھط´طھط؛ظ„ ظپظٹ Isolate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ط¨طھطµظ„ظ‘ط­ ط§طھط¬ط§ظ‡ ط§ظ„ظ€ EXIF ظˆط¨طھط¯ظˆظ‘ط± ط§ظ„طµظˆط±ط© ظ„ظˆ deg != 0. ط¨طھط±ط¬ط¹ true ظ„ظˆ ظƒطھط¨طھ ظ…ظ„ظپ ط¬ط¯ظٹط¯.
 bool _fixImage(String src, String dst, int deg) {
   final bytes = File(src).readAsBytesSync();
   var im = img.decodeImage(bytes);
@@ -1992,7 +2260,7 @@ bool _fixImage(String src, String dst, int deg) {
   return true;
 }
 
-// نسخة محسّنة للقراءة التانية: رمادي + كونتراست + تكبير/تصغير لمقاس مناسب للـ OCR
+// ظ†ط³ط®ط© ظ…ط­ط³ظ‘ظ†ط© ظ„ظ„ظ‚ط±ط§ط،ط© ط§ظ„طھط§ظ†ظٹط©: ط±ظ…ط§ط¯ظٹ + ظƒظˆظ†طھط±ط§ط³طھ + طھظƒط¨ظٹط±/طھطµط؛ظٹط± ظ„ظ…ظ‚ط§ط³ ظ…ظ†ط§ط³ط¨ ظ„ظ„ظ€ OCR
 void _enhanceImage(String src, String dst) {
   var im = img.decodeImage(File(src).readAsBytesSync());
   if (im == null) throw Exception('decode failed');
@@ -2014,9 +2282,9 @@ Future<bool> fixImageAsync(String src, String dst, int deg) =>
 Future<void> enhanceImageAsync(String src, String dst) =>
     Isolate.run(() => _enhanceImage(src, dst));
 
-// ───────────────── سكانر الباتش: قص الإيصال من الصورة + تعديل المنظور + تحسين (زي كام سكانر) ─────────────────
-// الفكرة: الورقة البيضا (الباتش) أفتح من الخلفية (ترابيزة/إيد/أرضية). بنفصل الورقة بحدّ Otsu،
-// بنطلّع أكبر مكوّن، بنفرد منظوره (4 أركان)، وبعدين بنشيل الظلال ونبيّض الورقة ونغمّق الكتابة.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط³ظƒط§ظ†ط± ط§ظ„ط¨ط§طھط´: ظ‚طµ ط§ظ„ط¥ظٹطµط§ظ„ ظ…ظ† ط§ظ„طµظˆط±ط© + طھط¹ط¯ظٹظ„ ط§ظ„ظ…ظ†ط¸ظˆط± + طھط­ط³ظٹظ† (ط²ظٹ ظƒط§ظ… ط³ظƒط§ظ†ط±) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ط§ظ„ظپظƒط±ط©: ط§ظ„ظˆط±ظ‚ط© ط§ظ„ط¨ظٹط¶ط§ (ط§ظ„ط¨ط§طھط´) ط£ظپطھط­ ظ…ظ† ط§ظ„ط®ظ„ظپظٹط© (طھط±ط§ط¨ظٹط²ط©/ط¥ظٹط¯/ط£ط±ط¶ظٹط©). ط¨ظ†ظپطµظ„ ط§ظ„ظˆط±ظ‚ط© ط¨ط­ط¯ظ‘ OtsuطŒ
+// ط¨ظ†ط·ظ„ظ‘ط¹ ط£ظƒط¨ط± ظ…ظƒظˆظ‘ظ†طŒ ط¨ظ†ظپط±ط¯ ظ…ظ†ط¸ظˆط±ظ‡ (4 ط£ط±ظƒط§ظ†)طŒ ظˆط¨ط¹ط¯ظٹظ† ط¨ظ†ط´ظٹظ„ ط§ظ„ط¸ظ„ط§ظ„ ظˆظ†ط¨ظٹظ‘ط¶ ط§ظ„ظˆط±ظ‚ط© ظˆظ†ط؛ظ…ظ‘ظ‚ ط§ظ„ظƒطھط§ط¨ط©.
 int _otsu(List<int> hist, int total) {
   var sumAll = 0;
   for (var i = 0; i < 256; i++) {
@@ -2050,7 +2318,7 @@ List<double> _trimRange(List<double> v, double f) {
 int _ci(int v, int lo, int hi) => v < lo ? lo : (v > hi ? hi : v);
 double _cd(double v, double lo, double hi) => v < lo ? lo : (v > hi ? hi : v);
 
-// خط مستقيم q = m*p + k بأقل مربعات مع استبعاد النقط الشاردة. null لو النقط قليلة.
+// ط®ط· ظ…ط³طھظ‚ظٹظ… q = m*p + k ط¨ط£ظ‚ظ„ ظ…ط±ط¨ط¹ط§طھ ظ…ط¹ ط§ط³طھط¨ط¹ط§ط¯ ط§ظ„ظ†ظ‚ط· ط§ظ„ط´ط§ط±ط¯ط©. null ظ„ظˆ ط§ظ„ظ†ظ‚ط· ظ‚ظ„ظٹظ„ط©.
 List<double>? _fitLine(List<double?> qs, List<double> ps, int skip) {
   var pp = <double>[];
   var qq = <double>[];
@@ -2097,7 +2365,7 @@ List<double>? _fitLine(List<double?> qs, List<double> ps, int skip) {
   return [m, k];
 }
 
-// أركان الورقة [tlx,tly,trx,try,blx,bly,brx,bry] بإحداثيات الصورة الصغيرة
+// ط£ط±ظƒط§ظ† ط§ظ„ظˆط±ظ‚ط© [tlx,tly,trx,try,blx,bly,brx,bry] ط¨ط¥ط­ط¯ط§ط«ظٹط§طھ ط§ظ„طµظˆط±ط© ط§ظ„طµط؛ظٹط±ط©
 List<double>? _quadOfComponent(List<int> pts, Int32List lab, int cid, int sw, int sh) {
   final bx = <double>[];
   final by = <double>[];
@@ -2119,7 +2387,7 @@ List<double>? _quadOfComponent(List<int> pts, Int32List lab, int cid, int sw, in
   }
   if (bx.length < 20) return null;
 
-  // أصغر مستطيل مايل يحيط بالورقة
+  // ط£طµط؛ط± ظ…ط³طھط·ظٹظ„ ظ…ط§ظٹظ„ ظٹط­ظٹط· ط¨ط§ظ„ظˆط±ظ‚ط©
   var bestArea = double.infinity;
   var bestDeg = 0;
   for (var deg = 0; deg < 90; deg += 2) {
@@ -2162,8 +2430,8 @@ List<double>? _quadOfComponent(List<int> pts, Int32List lab, int cid, int sw, in
   final xr = _trimRange(ax, 0.006);
   final yr = _trimRange(ay, 0.006);
   final vertical = (yr[1] - yr[0]) >= (xr[1] - xr[0]);
-  final lp = vertical ? ay : ax; // على طول الورقة
-  final lq = vertical ? ax : ay; // عرض الورقة
+  final lp = vertical ? ay : ax; // ط¹ظ„ظ‰ ط·ظˆظ„ ط§ظ„ظˆط±ظ‚ط©
+  final lq = vertical ? ax : ay; // ط¹ط±ط¶ ط§ظ„ظˆط±ظ‚ط©
   final l0 = vertical ? yr[0] : xr[0];
   final l1 = vertical ? yr[1] : xr[1];
   if (l1 - l0 < 4) return null;
@@ -2223,7 +2491,7 @@ double _quadArea(List<double> q) {
 double _dist(double x1, double y1, double x2, double y2) =>
     math.sqrt((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2));
 
-// بيرجّع أركان كل باتش في الصورة (بإحداثيات الصورة الأصلية). فاضي = مش عارف يلاقي ورقة.
+// ط¨ظٹط±ط¬ظ‘ط¹ ط£ط±ظƒط§ظ† ظƒظ„ ط¨ط§طھط´ ظپظٹ ط§ظ„طµظˆط±ط© (ط¨ط¥ط­ط¯ط§ط«ظٹط§طھ ط§ظ„طµظˆط±ط© ط§ظ„ط£طµظ„ظٹط©). ظپط§ط¶ظٹ = ظ…ط´ ط¹ط§ط±ظپ ظٹظ„ط§ظ‚ظٹ ظˆط±ظ‚ط©.
 List<List<double>> _detectReceipts(img.Image im) {
   final w = im.width, h = im.height;
   final s = 480.0 / math.max(w, h);
@@ -2281,7 +2549,7 @@ List<List<double>> _detectReceipts(img.Image im) {
   final mainSize = comps[order.first].length;
   if (mainSize < total * 0.04) return [];
   if (mainSize > total * 0.9) {
-    // الصورة كلها ورقة (سكرين/اسكانر جاهز): بس نحسّنها
+    // ط§ظ„طµظˆط±ط© ظƒظ„ظ‡ط§ ظˆط±ظ‚ط© (ط³ظƒط±ظٹظ†/ط§ط³ظƒط§ظ†ط± ط¬ط§ظ‡ط²): ط¨ط³ ظ†ط­ط³ظ‘ظ†ظ‡ط§
     return [
       [0.0, 0.0, w.toDouble(), 0.0, 0.0, h.toDouble(), w.toDouble(), h.toDouble()]
     ];
@@ -2297,7 +2565,7 @@ List<List<double>> _detectReceipts(img.Image im) {
     if (area <= 0 || pts.length / area < 0.45) continue;
     out.add(<double>[for (final v in q) v / s]);
   }
-  // لو في أكتر من باتش في الصورة: رتّبهم شمال ليمين (أو فوق لتحت لو فوق بعض)
+  // ظ„ظˆ ظپظٹ ط£ظƒطھط± ظ…ظ† ط¨ط§طھط´ ظپظٹ ط§ظ„طµظˆط±ط©: ط±طھظ‘ط¨ظ‡ظ… ط´ظ…ط§ظ„ ظ„ظٹظ…ظٹظ† (ط£ظˆ ظپظˆظ‚ ظ„طھط­طھ ظ„ظˆ ظپظˆظ‚ ط¨ط¹ط¶)
   out.sort((a, b) {
     final acx = (a[0] + a[2] + a[4] + a[6]) / 4, bcx = (b[0] + b[2] + b[4] + b[6]) / 4;
     final acy = (a[1] + a[3] + a[5] + a[7]) / 4, bcy = (b[1] + b[3] + b[5] + b[7]) / 4;
@@ -2308,7 +2576,7 @@ List<List<double>> _detectReceipts(img.Image im) {
   return out;
 }
 
-// بيفرد الورقة (تعديل منظور) ويحسّنها: يشيل الظلال، يبيّض الخلفية، يغمّق الكتابة
+// ط¨ظٹظپط±ط¯ ط§ظ„ظˆط±ظ‚ط© (طھط¹ط¯ظٹظ„ ظ…ظ†ط¸ظˆط±) ظˆظٹط­ط³ظ‘ظ†ظ‡ط§: ظٹط´ظٹظ„ ط§ظ„ط¸ظ„ط§ظ„طŒ ظٹط¨ظٹظ‘ط¶ ط§ظ„ط®ظ„ظپظٹط©طŒ ظٹط؛ظ…ظ‘ظ‚ ط§ظ„ظƒطھط§ط¨ط©
 img.Image? _warpAndEnhance(img.Image im, List<double> q) {
   final wq = (_dist(q[0], q[1], q[2], q[3]) + _dist(q[4], q[5], q[6], q[7])) / 2;
   final hq = (_dist(q[0], q[1], q[4], q[5]) + _dist(q[2], q[3], q[6], q[7])) / 2;
@@ -2317,7 +2585,7 @@ img.Image? _warpAndEnhance(img.Image im, List<double> q) {
   final wo = math.max(8, (wq * k).round());
   final ho = math.max(8, (hq * k).round());
 
-  // قص المنطقة المحيطة بالورقة بس (أسرع كتير) وتصغيرها لو كبيرة
+  // ظ‚طµ ط§ظ„ظ…ظ†ط·ظ‚ط© ط§ظ„ظ…ط­ظٹط·ط© ط¨ط§ظ„ظˆط±ظ‚ط© ط¨ط³ (ط£ط³ط±ط¹ ظƒطھظٹط±) ظˆطھطµط؛ظٹط±ظ‡ط§ ظ„ظˆ ظƒط¨ظٹط±ط©
   final xs = [q[0], q[2], q[4], q[6]];
   final ys = [q[1], q[3], q[5], q[7]];
   final cx0 = _ci(xs.reduce(math.min).floor() - 6, 0, im.width - 2);
@@ -2346,7 +2614,7 @@ img.Image? _warpAndEnhance(img.Image im, List<double> q) {
   final blx = (q[4] - cx0) * sx, bly = (q[5] - cy0) * sy;
   final brx = (q[6] - cx0) * sx, bry = (q[7] - cy0) * sy;
 
-  // فرد المنظور (استيفاء ثنائي بين الأركان الأربعة)
+  // ظپط±ط¯ ط§ظ„ظ…ظ†ط¸ظˆط± (ط§ط³طھظٹظپط§ط، ط«ظ†ط§ط¦ظٹ ط¨ظٹظ† ط§ظ„ط£ط±ظƒط§ظ† ط§ظ„ط£ط±ط¨ط¹ط©)
   const inset = 0.008;
   final og = Uint8List(wo * ho);
   for (var j = 0; j < ho; j++) {
@@ -2366,7 +2634,7 @@ img.Image? _warpAndEnhance(img.Image im, List<double> q) {
     }
   }
 
-  // تحسين: نقدّر لون الورقة (أعلى قيمة في كل مربع) ونقسم عليه = شيل الظلال وتبييض الخلفية
+  // طھط­ط³ظٹظ†: ظ†ظ‚ط¯ظ‘ط± ظ„ظˆظ† ط§ظ„ظˆط±ظ‚ط© (ط£ط¹ظ„ظ‰ ظ‚ظٹظ…ط© ظپظٹ ظƒظ„ ظ…ط±ط¨ط¹) ظˆظ†ظ‚ط³ظ… ط¹ظ„ظٹظ‡ = ط´ظٹظ„ ط§ظ„ط¸ظ„ط§ظ„ ظˆطھط¨ظٹظٹط¶ ط§ظ„ط®ظ„ظپظٹط©
   const bs = 12;
   final hb = (ho + bs - 1) ~/ bs, wb = (wo + bs - 1) ~/ bs;
   var bg = List<double>.filled(hb * wb, 0.0);
@@ -2413,7 +2681,7 @@ img.Image? _warpAndEnhance(img.Image im, List<double> q) {
       final bot = bg[by1 * wb + bx0] * (1 - fx) + bg[by1 * wb + bx1] * fx;
       final bgv = top * (1 - fy) + bot * fy;
       final n = _cd(og[y * wo + x] / math.max(bgv, 40.0) * 255.0, 0.0, 255.0);
-      // منحنى أغمق للكتابة (gamma) علشان الأرقام تفضل تقيلة وواضحة
+      // ظ…ظ†ط­ظ†ظ‰ ط£ط؛ظ…ظ‚ ظ„ظ„ظƒطھط§ط¨ط© (gamma) ط¹ظ„ط´ط§ظ† ط§ظ„ط£ط±ظ‚ط§ظ… طھظپط¶ظ„ طھظ‚ظٹظ„ط© ظˆظˆط§ط¶ط­ط©
       final o = math.pow(_cd((n - 30.0) / (240.0 - 30.0), 0.0, 1.0), 1.6).toDouble();
       final c = (o * 255).round();
       res.setPixelRgb(x, y, c, c, c);
@@ -2422,7 +2690,7 @@ img.Image? _warpAndEnhance(img.Image im, List<double> q) {
   return res;
 }
 
-// بتشتغل في Isolate. بترجّع مسارات الصفحات (صفحة لكل باتش). فاضي = استخدم الصورة الأصلية.
+// ط¨طھط´طھط؛ظ„ ظپظٹ Isolate. ط¨طھط±ط¬ظ‘ط¹ ظ…ط³ط§ط±ط§طھ ط§ظ„طµظپط­ط§طھ (طµظپط­ط© ظ„ظƒظ„ ط¨ط§طھط´). ظپط§ط¶ظٹ = ط§ط³طھط®ط¯ظ… ط§ظ„طµظˆط±ط© ط§ظ„ط£طµظ„ظٹط©.
 List<String> _scanToPages(String src, String base) {
   final cached = <String>[];
   var ci = 0;
@@ -2468,12 +2736,12 @@ Future<List<String>> scanReceiptAsync(String src) async {
 }
 
 
-// ───────────────── ملء القالب مباشرة جوه ملف الـ xlsx (من غير ما نبوّظ التنسيق) ─────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ظ…ظ„ط، ط§ظ„ظ‚ط§ظ„ط¨ ظ…ط¨ط§ط´ط±ط© ط¬ظˆظ‡ ظ…ظ„ظپ ط§ظ„ظ€ xlsx (ظ…ظ† ط؛ظٹط± ظ…ط§ ظ†ط¨ظˆظ‘ط¸ ط§ظ„طھظ†ط³ظٹظ‚) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Future<List<int>?> loadTemplateBytes() async {
   try {
     final mine = File('$baseDir/template.xlsx');
     if (mine.existsSync()) return mine.readAsBytesSync();
-    final exact = File('$baseDir/الاسكندريه 00.xlsx');
+    final exact = File('$baseDir/ظ†طھظٹط¬ط© 00.xlsx');
     if (exact.existsSync()) return exact.readAsBytesSync();
     final d = Directory(baseDir);
     if (d.existsSync()) {
@@ -2492,7 +2760,7 @@ Future<List<int>?> loadTemplateBytes() async {
     final data = await rootBundle.load('assets/template.xlsx');
     return data.buffer.asUint8List();
   } catch (_) {}
-  return null;
+  return _blankTemplateBytes();
 }
 
 String _firstSheetPath(Archive arc) {
@@ -2551,7 +2819,7 @@ double _readNum(String xml, String col, int row) {
   return 0.0;
 }
 
-// بيكتب خلية واحدة محافظ على الـ style بتاعها. build(style, oldFormulaElement) -> xml الخلية
+// ط¨ظٹظƒطھط¨ ط®ظ„ظٹط© ظˆط§ط­ط¯ط© ظ…ط­ط§ظپط¸ ط¹ظ„ظ‰ ط§ظ„ظ€ style ط¨طھط§ط¹ظ‡ط§. build(style, oldFormulaElement) -> xml ط§ظ„ط®ظ„ظٹط©
 String _setCell(String xml, String col, int row,
     String Function(String ref, String? style, String? formula) build) {
   final rm = _findRow(xml, row);
@@ -2608,8 +2876,8 @@ String _numStr(double v) {
   return r == r.roundToDouble() ? r.toInt().toString() : r.toString();
 }
 
-// بيبني صفحة النتايج: صف العناوين زي ما هو، وصف لكل وحدة بنفس تنسيق أول صف بيانات في القالب
-// (عدد الصفوف = عدد الوحدات اللي اتعرفت من الفحص، بيزيد أو بيقل حسب العدد)
+// ط¨ظٹط¨ظ†ظٹ طµظپط­ط© ط§ظ„ظ†طھط§ظٹط¬: طµظپ ط§ظ„ط¹ظ†ط§ظˆظٹظ† ط²ظٹ ظ…ط§ ظ‡ظˆطŒ ظˆطµظپ ظ„ظƒظ„ ظˆط­ط¯ط© ط¨ظ†ظپط³ طھظ†ط³ظٹظ‚ ط£ظˆظ„ طµظپ ط¨ظٹط§ظ†ط§طھ ظپظٹ ط§ظ„ظ‚ط§ظ„ط¨
+// (ط¹ط¯ط¯ ط§ظ„طµظپظˆظپ = ط¹ط¯ط¯ ط§ظ„ظˆط­ط¯ط§طھ ط§ظ„ظ„ظٹ ط§طھط¹ط±ظپطھ ظ…ظ† ط§ظ„ظپط­طµطŒ ط¨ظٹط²ظٹط¯ ط£ظˆ ط¨ظٹظ‚ظ„ ط­ط³ط¨ ط§ظ„ط¹ط¯ط¯)
 String buildUnitsSheetXml(String xml, List<_UnitOut> units) {
   final sd = RegExp(r'<sheetData\b[^>]*?(?:/>|>(.*?)</sheetData>)', dotAll: true).firstMatch(xml);
   if (sd == null) throw Exception('sheetData missing');
@@ -2698,7 +2966,7 @@ List<int> fillTemplate(List<int> bytes, List<_UnitOut> units) {
   var found = false;
   for (final f in arc.files) {
     if (!f.isFile) continue;
-    if (f.name == 'xl/calcChain.xml') continue; // بيتعمل من جديد، وكان هيبوّظ الملف بعد تغيير الصفوف
+    if (f.name == 'xl/calcChain.xml') continue; // ط¨ظٹطھط¹ظ…ظ„ ظ…ظ† ط¬ط¯ظٹط¯طŒ ظˆظƒط§ظ† ظ‡ظٹط¨ظˆظ‘ط¸ ط§ظ„ظ…ظ„ظپ ط¨ط¹ط¯ طھط؛ظٹظٹط± ط§ظ„طµظپظˆظپ
     final c = f.content as List<int>;
     if (f.name == sheetPath) {
       found = true;
@@ -2722,7 +2990,7 @@ List<int> fillTemplate(List<int> bytes, List<_UnitOut> units) {
   return enc;
 }
 
-// ───────────────── قنوات النظام (واتساب مباشر / فتح فولدر) ─────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ظ‚ظ†ظˆط§طھ ط§ظ„ظ†ط¸ط§ظ… (ظˆط§طھط³ط§ط¨ ظ…ط¨ط§ط´ط± / ظپطھط­ ظپظˆظ„ط¯ط±) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const MethodChannel _chan = MethodChannel('pos/native');
 
 String todayToken() {
@@ -2731,16 +2999,16 @@ String todayToken() {
 }
 
 String _normAr(String s) => s
-    .replaceAll(RegExp('[أإآ]'), 'ا')
-    .replaceAll('ة', 'ه')
-    .replaceAll('ى', 'ي')
+    .replaceAll(RegExp('[ط£ط¥ط¢]'), 'ط§')
+    .replaceAll('ط©', 'ظ‡')
+    .replaceAll('ظ‰', 'ظٹ')
     .toLowerCase();
 
-// ملف PDF اسمه "الاسكندريه + تاريخ النهارده" (بيقبل 5.11 / 05.11 / 5-11 / 5_11)
+// ظ…ظ„ظپ PDF طھظ‚ظپظٹظ„ ط§ط³ظ…ظ‡ ظپظٹظ‡ طھط§ط±ظٹط® ط§ظ„ظ†ظ‡ط§ط±ط¯ظ‡ (ط¨ظٹظ‚ط¨ظ„ 5.11 / 05.11 / 5-11 / 5_11)
 bool isTodayAlexPdf(String path) {
   final name = _normAr(baseName(path));
   if (!name.endsWith('.pdf')) return false;
-  if (!name.contains('اسكندري')) return false;
+  if (!(name.contains('ط§ط³ظƒظ†ط¯ط±ظٹ') || name.contains('ظ†طھظٹط¬') || name.contains('طھظ‚ظپظٹظ„') || name.contains('ط§ظ‚ظپط§ظ„'))) return false;
   final n = DateTime.now();
   final re = RegExp('(?<!\\d)0?${n.day}[._\\- ]0?${n.month}(?!\\d)');
   return re.hasMatch(name);
@@ -2750,7 +3018,7 @@ List<File> findTodayAlexPdfs(List<String> dirs) {
   final out = <File>[];
   final seen = <String>{};
   for (final d in dirs) {
-    if (d == outputDir) continue; // ما نقراش الملفات اللي التطبيق نفسه طلّعها
+    if (d == outputDir) continue; // ظ…ط§ ظ†ظ‚ط±ط§ط´ ط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ظ„ظٹ ط§ظ„طھط·ط¨ظٹظ‚ ظ†ظپط³ظ‡ ط·ظ„ظ‘ط¹ظ‡ط§
     try {
       final dir = Directory(d);
       if (!dir.existsSync()) continue;
@@ -2763,7 +3031,7 @@ List<File> findTodayAlexPdfs(List<String> dirs) {
   return out;
 }
 
-// ───────────────────── نموذج الإيصال ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ظ†ظ…ظˆط°ط¬ ط§ظ„ط¥ظٹطµط§ظ„ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class ReceiptItem {
   String path;
   String? tid;
@@ -2772,25 +3040,26 @@ class ReceiptItem {
   String? unitName;
   double amount;
   String? date;
-  String key; // اسم الملف الأصلي + حجمه (لحفظ التصحيحات اليدوية)
-  bool ok; // المبلغ مؤكد؟
+  String key; // ط§ط³ظ… ط§ظ„ظ…ظ„ظپ ط§ظ„ط£طµظ„ظٹ + ط­ط¬ظ…ظ‡ (ظ„ط­ظپط¸ ط§ظ„طھطµط­ظٹط­ط§طھ ط§ظ„ظٹط¯ظˆظٹط©)
+  bool ok; // ط§ظ„ظ…ط¨ظ„ط؛ ظ…ط¤ظƒط¯طں
   String how; // terminal | fuzzy | name/merchant | auto-number | conflict | extra-batch | manual
   List<double> batches;
   int? suffix;
   String? origTid;
   bool conflict;
   bool skip;
-  double? alt; // قراءة تانية مختلفة للمبلغ (للمراجعة)
-  bool dupSuspect; // مشكوك إنه مكرر: بيدخل المراجعة ومش بيتحسب لحد ما تقرر
-  bool userExcluded; // انت استبعدته في المراجعة
-  String? dupDecision; // 'keep' | 'drop' (قرارك بيتحفظ للمرة الجاية)
-  int? dupOf; // رقم الماكينة اللي شبهه
-  String? unusual; // إجمالي بعيد عن المعتاد (للمراجعة)
-  bool ignoredDoc; // صورة اتجاهلها التطبيق (شكلها إيصال دفع/مستند): بتدخل المراجعة
-  String? ign; // 'keep' | 'drop' قرارك في الصورة المتجاهلة
-  bool dateOdd; // تاريخه مختلف عن أغلب الإيصالات
-  String? dateMain; // التاريخ الأغلب
-  String? dateFix; // التاريخ اللي انت أكدته
+  double? alt; // ظ‚ط±ط§ط،ط© طھط§ظ†ظٹط© ظ…ط®طھظ„ظپط© ظ„ظ„ظ…ط¨ظ„ط؛ (ظ„ظ„ظ…ط±ط§ط¬ط¹ط©)
+  bool dupSuspect; // ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط±: ط¨ظٹط¯ط®ظ„ ط§ظ„ظ…ط±ط§ط¬ط¹ط© ظˆظ…ط´ ط¨ظٹطھط­ط³ط¨ ظ„ط­ط¯ ظ…ط§ طھظ‚ط±ط±
+  bool userExcluded; // ط§ظ†طھ ط§ط³طھط¨ط¹ط¯طھظ‡ ظپظٹ ط§ظ„ظ…ط±ط§ط¬ط¹ط©
+  String? dupDecision; // 'keep' | 'drop' (ظ‚ط±ط§ط±ظƒ ط¨ظٹطھط­ظپط¸ ظ„ظ„ظ…ط±ط© ط§ظ„ط¬ط§ظٹط©)
+  int? dupOf; // ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط© ط§ظ„ظ„ظٹ ط´ط¨ظ‡ظ‡
+  String? unusual; // ط¥ط¬ظ…ط§ظ„ظٹ ط¨ط¹ظٹط¯ ط¹ظ† ط§ظ„ظ…ط¹طھط§ط¯ (ظ„ظ„ظ…ط±ط§ط¬ط¹ط©)
+  bool ignoredDoc; // طµظˆط±ط© ط§طھط¬ط§ظ‡ظ„ظ‡ط§ ط§ظ„طھط·ط¨ظٹظ‚ (ط´ظƒظ„ظ‡ط§ ط¥ظٹطµط§ظ„ ط¯ظپط¹/ظ…ط³طھظ†ط¯): ط¨طھط¯ط®ظ„ ط§ظ„ظ…ط±ط§ط¬ط¹ط©
+  String? ign; // 'keep' | 'drop' ظ‚ط±ط§ط±ظƒ ظپظٹ ط§ظ„طµظˆط±ط© ط§ظ„ظ…طھط¬ط§ظ‡ظ„ط©
+  bool dateOdd; // طھط§ط±ظٹط®ظ‡ ظ…ط®طھظ„ظپ ط¹ظ† ط£ط؛ظ„ط¨ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ
+  String? dateMain; // ط§ظ„طھط§ط±ظٹط® ط§ظ„ط£ط؛ظ„ط¨
+  String? dateFix; // ط§ظ„طھط§ط±ظٹط® ط§ظ„ظ„ظٹ ط§ظ†طھ ط£ظƒط¯طھظ‡
+  int? txn; // ط¹ط¯ط¯ ظ…ط¹ط§ظ…ظ„ط§طھ ط§ظ„ط¨ط§طھط´ ط§ظ„ظ…ظ‚ط±ظˆط، ظ…ظ† ط¥ظٹطµط§ظ„ ط§ظ„ط¥ظ‚ظپط§ظ„
 
   ReceiptItem({
     required this.path,
@@ -2818,10 +3087,10 @@ class ReceiptItem {
     this.dateOdd = false,
   }) : batches = batches ?? <double>[];
 
-  // داخل في الإجماليات والـ PDF؟
+  // ط¯ط§ط®ظ„ ظپظٹ ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹط§طھ ظˆط§ظ„ظ€ PDFطں
   bool get counts => !skip && !dupSuspect && !userExcluded && !ignoredDoc;
 
-  // الماكينة/الوحدة متحددة بطريقة مش مؤكدة (تلقائي / بالاسم فقط)
+  // ط§ظ„ظ…ط§ظƒظٹظ†ط©/ط§ظ„ظˆط­ط¯ط© ظ…طھط­ط¯ط¯ط© ط¨ط·ط±ظٹظ‚ط© ظ…ط´ ظ…ط¤ظƒط¯ط© (طھظ„ظ‚ط§ط¦ظٹ / ط¨ط§ظ„ط§ط³ظ… ظپظ‚ط·)
   bool get weakId =>
       !(how == 'terminal' || how == 'fuzzy' || how == 'manual' || how == 'extra-batch');
 
@@ -2838,7 +3107,7 @@ class ReceiptItem {
               weakId));
 }
 
-// ───────────────────── التصحيحات اليدوية (بتفضل محفوظة) ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط§ظ„طھطµط­ظٹط­ط§طھ ط§ظ„ظٹط¯ظˆظٹط© (ط¨طھظپط¶ظ„ ظ…ط­ظپظˆط¸ط©) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 final String fixPath = '$baseDir/.app_fix.json';
 
 Map<String, dynamic> loadFixes() {
@@ -2866,7 +3135,7 @@ void saveFix(ReceiptItem item) {
   } catch (_) {}
 }
 
-// صورة كان التطبيق متجاهلها: ادخلها كباتش (هتكمّل المبلغ والماكينة بإيدك)
+// طµظˆط±ط© ظƒط§ظ† ط§ظ„طھط·ط¨ظٹظ‚ ظ…طھط¬ط§ظ‡ظ„ظ‡ط§: ط§ط¯ط®ظ„ظ‡ط§ ظƒط¨ط§طھط´ (ظ‡طھظƒظ…ظ‘ظ„ ط§ظ„ظ…ط¨ظ„ط؛ ظˆط§ظ„ظ…ط§ظƒظٹظ†ط© ط¨ط¥ظٹط¯ظƒ)
 void keepIgnored(ReceiptItem it) {
   try {
     if (!it.path.startsWith('$rawImagesDir/')) {
@@ -2882,7 +3151,7 @@ void keepIgnored(ReceiptItem it) {
   saveFix(it);
 }
 
-// احتساب إيصال (مشكوك أو مستبعد) كباتش إضافي للماكينة
+// ط§ط­طھط³ط§ط¨ ط¥ظٹطµط§ظ„ (ظ…ط´ظƒظˆظƒ ط£ظˆ ظ…ط³طھط¨ط¹ط¯) ظƒط¨ط§طھط´ ط¥ط¶ط§ظپظٹ ظ„ظ„ظ…ط§ظƒظٹظ†ط©
 void keepAsExtraBatch(ReceiptItem it, List<ReceiptItem> all) {
   var k = 2;
   bool used(int n) => all.any((x) =>
@@ -2907,7 +3176,7 @@ void keepAsExtraBatch(ReceiptItem it, List<ReceiptItem> all) {
   saveFix(it);
 }
 
-// إجمالي ماكينة بعيد جداً عن متوسط الأيام اللي فاتت = غالباً قراءة غلط -> مراجعة
+// ط¥ط¬ظ…ط§ظ„ظٹ ظ…ط§ظƒظٹظ†ط© ط¨ط¹ظٹط¯ ط¬ط¯ط§ظ‹ ط¹ظ† ظ…طھظˆط³ط· ط§ظ„ط£ظٹط§ظ… ط§ظ„ظ„ظٹ ظپط§طھطھ = ط؛ط§ظ„ط¨ط§ظ‹ ظ‚ط±ط§ط،ط© ط؛ظ„ط· -> ظ…ط±ط§ط¬ط¹ط©
 void checkUnusual(List<ReceiptItem> items, String reportDate) {
   for (final r in items) {
     r.unusual = null;
@@ -2938,14 +3207,14 @@ void checkUnusual(List<ReceiptItem> items, String reportDate) {
       final avg = prev.reduce((a, b) => a + b) / prev.length;
       if (avg < 1) continue;
       if (e.value > avg * 2.5 || e.value < avg / 2.5) {
-        final msg = 'إجمالي ماكينة ${e.key} (${e.value.toStringAsFixed(2)}) بعيد عن متوسط '
-            'الأيام اللي فاتت (${avg.toStringAsFixed(0)}) - اتأكد من المبلغ';
+        final msg = 'ط¥ط¬ظ…ط§ظ„ظٹ ظ…ط§ظƒظٹظ†ط© ${e.key} (${e.value.toStringAsFixed(2)}) ط¨ط¹ظٹط¯ ط¹ظ† ظ…طھظˆط³ط· '
+            'ط§ظ„ط£ظٹط§ظ… ط§ظ„ظ„ظٹ ظپط§طھطھ (${avg.toStringAsFixed(0)}) - ط§طھط£ظƒط¯ ظ…ظ† ط§ظ„ظ…ط¨ظ„ط؛';
         for (final r in items) {
           if (r.orderNum == e.key && r.how != 'manual') r.unusual = msg;
         }
       }
     }
-    if (reportDate != 'اليوم') {
+    if (reportDate != 'ط§ظ„ظٹظˆظ…') {
       hist[reportDate] = {for (final e in today.entries) '${e.key}': e.value};
       while (hist.length > 30) {
         hist.remove(hist.keys.first);
@@ -2957,7 +3226,7 @@ void checkUnusual(List<ReceiptItem> items, String reportDate) {
 }
 
 
-// ───────── العد السريع: صور الصفحات الأصلية (JPEG) من الـ PDF الممسوح + عدّ بالهيكل ─────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط§ظ„ط¹ط¯ ط§ظ„ط³ط±ظٹط¹: طµظˆط± ط§ظ„طµظپط­ط§طھ ط§ظ„ط£طµظ„ظٹط© (JPEG) ظ…ظ† ط§ظ„ظ€ PDF ط§ظ„ظ…ظ…ط³ظˆط­ + ط¹ط¯ظ‘ ط¨ط§ظ„ظ‡ظٹظƒظ„ â”€â”€â”€â”€â”€â”€â”€â”€â”€
 bool _loadFast() {
   try {
     return _readCfg()['fastCount'] != false;
@@ -2977,7 +3246,7 @@ void toggleFastCount() {
   } catch (_) {}
 }
 
-// بيطلّع صور الصفحات (JPEG) جاهزة من PDF ممسوح (CamScanner وغيره): من غير raster ولا PNG
+// ط¨ظٹط·ظ„ظ‘ط¹ طµظˆط± ط§ظ„طµظپط­ط§طھ (JPEG) ط¬ط§ظ‡ط²ط© ظ…ظ† PDF ظ…ظ…ط³ظˆط­ (CamScanner ظˆط؛ظٹط±ظ‡): ظ…ظ† ط؛ظٹط± raster ظˆظ„ط§ PNG
 List<List<int>> _pdfJpegRanges(Uint8List b) {
   final out = <List<int>>[];
   int find(String pat, int from) {
@@ -3032,10 +3301,8 @@ class _StructPage {
   final Map<String, int> types = {};
 }
 
-const _anchorRank = {'logo': 0, 'term': 1, 'rrn': 2, 'amount': 3, 'appr': 4};
-
-// عدّ الإيصالات بالهيكل: كل إيصال له شعار + Terminal ID + RRN + AMOUNT + Approved (مرة واحدة)
-// بنجمع العلامات دي ونقسمها أعمدة، وكل ما التسلسل (من فوق لتحت) يرجع لورا = إيصال جديد
+// ط¹ط¯ظ‘ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ ط¨ط§ظ„ظ‡ظٹظƒظ„: ظƒظ„ ط¥ظٹطµط§ظ„ ظ„ظ‡ ط´ط¹ط§ط± + Terminal ID + RRN + AMOUNT + Approved (ظ…ط±ط© ظˆط§ط­ط¯ط©)
+// ط¨ظ†ط¬ظ…ط¹ ط§ظ„ط¹ظ„ط§ظ…ط§طھ ط¯ظٹ ظˆظ†ظ‚ط³ظ…ظ‡ط§ ط£ط¹ظ…ط¯ط©طŒ ظˆظپظٹ ظƒظ„ ط¹ظ…ظˆط¯ ط£ظƒطھط± ط¹ظ„ط§ظ…ط© ظ…طھظƒط±ط±ط© = ط¹ط¯ط¯ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ
 _StructPage _structCount(RecognizedText res) {
   final out = _StructPage();
   final lines = toLines(res);
@@ -3060,7 +3327,7 @@ _StructPage _structCount(RecognizedText res) {
     if (amtRe.hasMatch(u) && !amtBad.hasMatch(u)) add('amount');
     if (u.contains('APPROVED')) add('appr');
   }
-  // إزالة التكرار (نفس العلامة اتقرت مرتين)
+  // ط¥ط²ط§ظ„ط© ط§ظ„طھظƒط±ط§ط± (ظ†ظپط³ ط§ظ„ط¹ظ„ط§ظ…ط© ط§طھظ‚ط±طھ ظ…ط±طھظٹظ†)
   final ded = <_SA>[];
   for (final a in all) {
     var dup = false;
@@ -3077,27 +3344,27 @@ _StructPage _structCount(RecognizedText res) {
   }
   if (ded.isEmpty) return out;
   out.mx = out.types.values.reduce((a, b) => a > b ? a : b);
-  // أعمدة
+  // ط£ط¹ظ…ط¯ط©
   ded.sort((a, b) => a.cx.compareTo(b.cx));
   final cols = <List<_SA>>[];
   var cur = <_SA>[ded.first];
   for (var i = 1; i < ded.length; i++) {
-    if (ded[i].cx - cur.last.cx > w * 0.06) {
+    if (ded[i].cx - cur.last.cx > w * 0.07) {
       cols.add(cur);
       cur = <_SA>[];
     }
     cur.add(ded[i]);
   }
   cols.add(cur);
+  // ظ„ظƒظ„ ط¹ظ…ظˆط¯: ظƒظ„ ط¹ظ„ط§ظ…ط© ط¨طھط¸ظ‡ط± ظ…ط±ط© ظˆط§ط­ط¯ط© ظپظٹ ظƒظ„ ط¥ظٹطµط§ظ„طŒ ظپط£ظƒط¨ط± ط¹ط¯ط¯ ظ„ط£ظٹ ط¹ظ„ط§ظ…ط© = ط¹ط¯ط¯ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ ظپظٹ ط§ظ„ط¹ظ…ظˆط¯
+  // (ظ„ظˆ ط¹ظ„ط§ظ…ط© ط§طھظ‚ط±طھ ظ†ط§ظ‚طµط© ط§ظ„طھط§ظ†ظٹط© ط¨طھط¹ظˆظ‘ط¶طŒ ظˆظ…ط´ ط¨ظٹطھط£ط«ط± ط¨ظ…ظٹظ„ ط§ظ„ط¥ظٹطµط§ظ„ ظˆظ„ط§ ط¨طھط±طھظٹط¨ ط§ظ„ظ‚ط±ط§ط،ط©)
   var n = 0;
   for (final c in cols) {
-    c.sort((a, b) => a.cy.compareTo(b.cy));
-    int? prev;
+    final cnt = <String, int>{};
     for (final a in c) {
-      final rk = _anchorRank[a.t]!;
-      if (prev == null || rk <= prev) n++;
-      prev = rk;
+      cnt[a.t] = (cnt[a.t] ?? 0) + 1;
     }
+    n += cnt.values.reduce((a, b) => a > b ? a : b);
   }
   out.sm = n;
   return out;
@@ -3106,7 +3373,7 @@ _StructPage _structCount(RecognizedText res) {
 bool sameDay(ReceiptItem a, ReceiptItem b) =>
     a.date == null || b.date == null || a.date == b.date;
 
-// بيجيب كل التطبيقات اللي تقدر تفتح فولدر (مدير ملفات) ويخلّيك تختار أي واحد، مش الافتراضي بس
+// ط¨ظٹط¬ظٹط¨ ظƒظ„ ط§ظ„طھط·ط¨ظٹظ‚ط§طھ ط§ظ„ظ„ظٹ طھظ‚ط¯ط± طھظپطھط­ ظپظˆظ„ط¯ط± (ظ…ط¯ظٹط± ظ…ظ„ظپط§طھ) ظˆظٹط®ظ„ظ‘ظٹظƒ طھط®طھط§ط± ط£ظٹ ظˆط§ط­ط¯طŒ ظ…ط´ ط§ظ„ط§ظپطھط±ط§ط¶ظٹ ط¨ط³
 Future<bool> chooseAndOpenFolder(BuildContext context, String path) async {
   var handlers = <Map<String, String>>[];
   try {
@@ -3118,7 +3385,7 @@ Future<bool> chooseAndOpenFolder(BuildContext context, String path) async {
       ];
     }
   } catch (_) {}
-  // كل تطبيق مرة واحدة (أول طريقة اتجربت هي اللي شغالة)، وبنشيل Termux لأنه مش بيعرض فولدرات
+  // ظƒظ„ طھط·ط¨ظٹظ‚ ظ…ط±ط© ظˆط§ط­ط¯ط© (ط£ظˆظ„ ط·ط±ظٹظ‚ط© ط§طھط¬ط±ط¨طھ ظ‡ظٹ ط§ظ„ظ„ظٹ ط´ط؛ط§ظ„ط©)طŒ ظˆط¨ظ†ط´ظٹظ„ Termux ظ„ط£ظ†ظ‡ ظ…ط´ ط¨ظٹط¹ط±ط¶ ظپظˆظ„ط¯ط±ط§طھ
   final seenPkgs = <String>{};
   handlers = handlers
       .where((h) => h['pkg'] != 'com.termux' && seenPkgs.add(h['pkg'] ?? ''))
@@ -3132,7 +3399,7 @@ Future<bool> chooseAndOpenFolder(BuildContext context, String path) async {
         shrinkWrap: true,
         children: [
           const ListTile(
-            title: Text('افتح الفولدر بواسطة', style: TextStyle(fontWeight: FontWeight.bold)),
+            title: Text('ط§ظپطھط­ ط§ظ„ظپظˆظ„ط¯ط± ط¨ظˆط§ط³ط·ط©', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
           for (final h in handlers)
             ListTile(
@@ -3142,14 +3409,14 @@ Future<bool> chooseAndOpenFolder(BuildContext context, String path) async {
             ),
           ListTile(
             leading: const Icon(Icons.folder_special, size: 32),
-            title: const Text('متصفح ملفات النظام', style: const TextStyle(fontWeight: FontWeight.bold)),
+            title: const Text('ظ…طھطµظپط­ ظ…ظ„ظپط§طھ ط§ظ„ظ†ط¸ط§ظ…', style: const TextStyle(fontWeight: FontWeight.bold)),
             onTap: () => Navigator.pop(c, <String, String>{'pkg': '', 'cls': '', 'kind': 'tree'}),
           ),
         ],
       ),
     ),
   );
-  if (picked == null) return true; // المستخدم قفل القايمة
+  if (picked == null) return true; // ط§ظ„ظ…ط³طھط®ط¯ظ… ظ‚ظپظ„ ط§ظ„ظ‚ط§ظٹظ…ط©
   try {
     final ok = await _chan.invokeMethod<bool>('openFolderWith', {
       'path': path,
@@ -3163,7 +3430,7 @@ Future<bool> chooseAndOpenFolder(BuildContext context, String path) async {
   }
 }
 
-// ───────────────────── الشاشة الرئيسية ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط§ظ„ط´ط§ط´ط© ط§ظ„ط±ط¦ظٹط³ظٹط© â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -3178,7 +3445,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String? customOut;
   bool busy = false;
   double progress = 0;
-  String status = 'اضغط "بدء المعالجة الشاملة" لسحب الصور وتوليد الإكسيل والـ PDF.';
+  String status = 'ط§ط¶ط؛ط· "ط¨ط¯ط، ط§ظ„ظ…ط¹ط§ظ„ط¬ط© ط§ظ„ط´ط§ظ…ظ„ط©" ظ„ط³ط­ط¨ ط§ظ„طµظˆط± ظˆطھظˆظ„ظٹط¯ ط§ظ„ط¥ظƒط³ظٹظ„ ظˆط§ظ„ظ€ PDF.';
   final List<ReceiptItem> processedItems = [];
   String? standardXlsxPath;
   String? generatedPdfPath;
@@ -3186,7 +3453,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<int> missingTerminals = [];
   final List<String> warnings = [];
   final List<String> excludedPay = [];
-  bool autoRotate = false; // أبطأ: بيجرّب تدوير كل صورة مش إيصال
+  bool autoRotate = false; // ط£ط¨ط·ط£: ط¨ظٹط¬ط±ظ‘ط¨ طھط¯ظˆظٹط± ظƒظ„ طµظˆط±ط© ظ…ط´ ط¥ظٹطµط§ظ„
   String sourceNote = '';
   bool reviewOnly = false;
 
@@ -3196,9 +3463,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     days = sharedDays.value;
     sharedDays.addListener(_syncDays);
+    wipeSignal.addListener(_onWipe);
     customDir = loadFolder();
     customOut = loadOutDir();
     if (customOut != null && customOut!.isNotEmpty) outputDir = customOut!;
+    // ط£ظˆظ„ ظ…ط§ ط§ظ„طھط·ط¨ظٹظ‚ ظٹظپطھط­: ط§ط·ظ„ط¨ ط¥ط°ظ† ط§ظ„ظ…ظ„ظپط§طھ (ظ„ظˆ ظ…ط´ ظ…ظ…ظ†ظˆط­) ظˆط§ظ†ط²ظ‘ظ„ ط´ظٹطھ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ ظˆط´ظٹطھ ط§ظ„ظ†طھظٹط¬ط© طھظ„ظ‚ط§ط¦ظٹ
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        if (!await Permission.manageExternalStorage.isGranted) {
+          await Permission.manageExternalStorage.request();
+        }
+      } catch (_) {}
+      await prepareDefaultFiles();
+    });
   }
 
   void _syncDays() {
@@ -3206,14 +3483,110 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     setState(() => days = sharedDays.value);
   }
 
+  void _onWipe() {
+    if (!mounted) return;
+    setState(() {
+      processedItems.clear();
+      missingTerminals = [];
+      warnings.clear();
+      excludedPay.clear();
+      standardXlsxPath = null;
+      generatedPdfPath = null;
+      extraPdfPaths = [];
+      reviewOnly = false;
+      sourceNote = '';
+      status = 'طھظ… ظ…ط³ط­ ظƒظ„ ط­ط§ط¬ط©. ط§ط¶ط؛ط· "ط¨ط¯ط، ط§ظ„ظ…ط¹ط§ظ„ط¬ط© ط§ظ„ط´ط§ظ…ظ„ط©" ظ„ط¨ط¯ط، ظٹظˆظ… ط¬ط¯ظٹط¯.';
+    });
+  }
+
+  Future<void> _onSwipe(ReceiptItem it, bool approve) async {
+    if (busy) return;
+    if (approve) {
+      if (it.dupSuspect) {
+        keepAsExtraBatch(it, processedItems);
+        await rebuildFiles();
+      } else if (it.dateOdd) {
+        it.dateFix = it.date;
+        it.dateOdd = false;
+        saveFix(it);
+        await rebuildFiles();
+      } else {
+        if (it.amount <= 0 || it.row == null) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: w.Text(_l(context, 'ظƒظ…ظ‘ظ„ ط§ظ„ظ…ط¨ظ„ط؛ ظˆط§ظ„ظ…ط§ظƒظٹظ†ط© ظ…ظ† ط²ط± ط§ظ„ظ‚ظ„ظ… ط§ظ„ط£ظˆظ„.',
+                  'Fill in the amount and machine with the pencil button first.'))));
+          return;
+        }
+        it.ok = true;
+        it.alt = null;
+        it.unusual = null;
+        if (it.how != 'extra-batch') it.how = 'manual';
+        saveFix(it);
+        setState(() {});
+      }
+    } else {
+      if (it.dupSuspect) {
+        it.dupSuspect = false;
+        it.userExcluded = true;
+        it.dupDecision = 'drop';
+        saveFix(it);
+        await rebuildFiles();
+      } else if (it.dateOdd) {
+        if (it.dateMain != null) it.date = it.dateMain;
+        it.dateFix = it.date;
+        it.dateOdd = false;
+        saveFix(it);
+        await rebuildFiles();
+      } else {
+        await editReceipt(it);
+      }
+    }
+  }
+
+  // ط³ط­ط¨ ط¥ظٹطµط§ظ„ ط§ظ„ظ…ط±ط§ط¬ط¹ط©: طµط­ âœ“ / ط؛ظ„ط· âœ— (ط؛ظ„ط· = ط§ط³طھط¨ط¹ط§ط¯ ظ„ظˆ ظ…ظƒط±ط±طŒ ظˆط¥ظ„ط§ ط¨ظٹظپطھط­ ط§ظ„طھطµط­ظٹط­)
+  Widget _swipeWrap(ReceiptItem item, Widget card) {
+    if (item.ignoredDoc || item.userExcluded || !item.needsReview) return card;
+    final okLabel = item.dupSuspect
+        ? _l(context, 'ط§ط­طھط³ط¨ظ‡ ط¨ط§طھط´ âœ“', 'Count it âœ“')
+        : (item.dateOdd ? _l(context, 'ط³ظٹط¨ طھط§ط±ظٹط®ظ‡ âœ“', 'Keep date âœ“') : _l(context, 'طµط­ âœ“', 'OK âœ“'));
+    final badLabel = item.dupSuspect
+        ? _l(context, 'ظ…ظƒط±ط± - ط§ط³طھط¨ط¹ط¯ظ‡ âœ—', 'Duplicate âœ—')
+        : (item.dateOdd ? _l(context, 'طھط§ط±ظٹط® ط§ظ„ط£ط؛ظ„ط¨ âœ—', 'Use main date âœ—') : _l(context, 'ط؛ظ„ط· - طµط­ظ‘ط­ظ‡ âœ—', 'Wrong - fix âœ—'));
+    return Dismissible(
+      key: ValueKey('sw_${item.path}'),
+      direction: busy ? DismissDirection.none : DismissDirection.horizontal,
+      confirmDismiss: (dir) async {
+        await _onSwipe(item, dir == DismissDirection.startToEnd);
+        return false;
+      },
+      background: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        color: _tintBg(context, Colors.green, strong: true),
+        alignment: AlignmentDirectional.centerStart,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: w.Text(okLabel, style: const TextStyle(fontWeight: FontWeight.bold)),
+      ),
+      secondaryBackground: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        color: _tintBg(context, Colors.red, strong: true),
+        alignment: AlignmentDirectional.centerEnd,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: w.Text(badLabel, style: const TextStyle(fontWeight: FontWeight.bold)),
+      ),
+      child: card,
+    );
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _life = state;
+    if (state == AppLifecycleState.resumed) prepareDefaultFiles();
   }
 
   @override
   void dispose() {
     sharedDays.removeListener(_syncDays);
+    wipeSignal.removeListener(_onWipe);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -3221,7 +3594,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> pickFolder() async {
     final perm = await Permission.manageExternalStorage.request();
     if (!perm.isGranted) {
-      setState(() => status = 'لازم تسمح بالوصول لكل الملفات الأول.');
+      setState(() => status = 'ظ„ط§ط²ظ… طھط³ظ…ط­ ط¨ط§ظ„ظˆطµظˆظ„ ظ„ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ط£ظˆظ„.');
       return;
     }
     if (!mounted) return;
@@ -3238,7 +3611,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> pickOutFolder() async {
     final perm = await Permission.manageExternalStorage.request();
     if (!perm.isGranted) {
-      setState(() => status = 'لازم تسمح بالوصول لكل الملفات الأول.');
+      setState(() => status = 'ظ„ط§ط²ظ… طھط³ظ…ط­ ط¨ط§ظ„ظˆطµظˆظ„ ظ„ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ط£ظˆظ„.');
       return;
     }
     if (!mounted) return;
@@ -3251,7 +3624,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final t = File('$res/.write_test')..writeAsStringSync('x');
         t.deleteSync();
       } catch (_) {
-        setState(() => status = 'مش قادر أكتب في الفولدر ده: $res');
+        setState(() => status = 'ظ…ط´ ظ‚ط§ط¯ط± ط£ظƒطھط¨ ظپظٹ ط§ظ„ظپظˆظ„ط¯ط± ط¯ظ‡: $res');
         return;
       }
       saveOutDir(res);
@@ -3293,25 +3666,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await Clipboard.setData(ClipboardData(text: path));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('مقدرتش أفتح الفولدر. المسار اتنسخ: $path')),
+      SnackBar(content: Text('ظ…ظ‚ط¯ط±طھط´ ط£ظپطھط­ ط§ظ„ظپظˆظ„ط¯ط±. ط§ظ„ظ…ط³ط§ط± ط§طھظ†ط³ط®: $path')),
     );
   }
 
-  // إرسال الإكسيل والـ PDF (المستخدم بيختار واتساب من قايمة المشاركة)
+  // ط¥ط±ط³ط§ظ„ ط§ظ„ط¥ظƒط³ظٹظ„ ظˆط§ظ„ظ€ PDF (ط§ظ„ظ…ط³طھط®ط¯ظ… ط¨ظٹط®طھط§ط± ظˆط§طھط³ط§ط¨ ظ…ظ† ظ‚ط§ظٹظ…ط© ط§ظ„ظ…ط´ط§ط±ظƒط©)
   Future<void> sendToWhatsApp() async {
     final x = latestOutput('.xlsx');
     final p = latestOutput('.pdf');
     final files = <XFile>[if (x != null) XFile(x), if (p != null) XFile(p)];
     if (files.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('لم يتم إنشاء ملفات بعد لمشاركتها.')),
+        const SnackBar(content: Text('ظ„ظ… ظٹطھظ… ط¥ظ†ط´ط§ط، ظ…ظ„ظپط§طھ ط¨ط¹ط¯ ظ„ظ…ط´ط§ط±ظƒطھظ‡ط§.')),
       );
       return;
     }
-    await Share.shareXFiles(files, text: 'تقرير إيصالات الإسكندرية');
+    if (!await confirmSend(context,
+        review: processedItems.where((e) => e.needsReview).length, missing: missingTerminals.length)) {
+      return;
+    }
+    await Share.shareXFiles(files, text: 'طھظ‚ط±ظٹط± ط§ظ„ط¥ظٹطµط§ظ„ط§طھ');
   }
 
-  // أحدث ملف إخراج (إكسيل/PDF): من آخر معالجة، أو آخر ملف "الاسكندريه ..." في فولدر الإخراج
+  // ط£ط­ط¯ط« ظ…ظ„ظپ ط¥ط®ط±ط§ط¬ (ط¥ظƒط³ظٹظ„/PDF): ظ…ظ† ط¢ط®ط± ظ…ط¹ط§ظ„ط¬ط©طŒ ط£ظˆ ط¢ط®ط± ظ…ظ„ظپ "ظ†طھظٹط¬ط© ..." ظپظٹ ظپظˆظ„ط¯ط± ط§ظ„ط¥ط®ط±ط§ط¬
   String? latestOutput(String ext) {
     final cur = ext == '.xlsx' ? standardXlsxPath : generatedPdfPath;
     if (cur != null && File(cur).existsSync()) return cur;
@@ -3323,7 +3700,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           .whereType<File>()
           .where((f) {
             final n = _normAr(baseName(f.path));
-            return n.endsWith(ext) && n.contains('اسكندري');
+            return n.endsWith(ext) && _isOutputFileName(baseName(f.path));
           })
           .toList()
         ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
@@ -3336,7 +3713,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> openFile(String? path, String mime) async {
     if (path == null || !File(path).existsSync()) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الملف مش موجود. شغّل المعالجة الأول.')),
+        const SnackBar(content: Text('ط§ظ„ظ…ظ„ظپ ظ…ط´ ظ…ظˆط¬ظˆط¯. ط´ط؛ظ‘ظ„ ط§ظ„ظ…ط¹ط§ظ„ط¬ط© ط§ظ„ط£ظˆظ„.')),
       );
       return;
     }
@@ -3346,7 +3723,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     } catch (_) {}
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('مفيش برنامج يفتح الملف ده.')),
+      const SnackBar(content: Text('ظ…ظپظٹط´ ط¨ط±ظ†ط§ظ…ط¬ ظٹظپطھط­ ط§ظ„ظ…ظ„ظپ ط¯ظ‡.')),
     );
   }
 
@@ -3355,7 +3732,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final l = n.toLowerCase();
     return n == 'review_report.txt' ||
         n == 'ocr_debug.txt' ||
-        ((l.endsWith('.xlsx') || l.endsWith('.pdf')) && _normAr(n).contains('اسكندري'));
+        _isOutputFileName(n);
   }
 
   Future<bool> _confirm(String title, String body) async {
@@ -3365,15 +3742,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         title: Text(title),
         content: Text(body),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('مسح')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ط¥ظ„ط؛ط§ط،')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('ظ…ط³ط­')),
         ],
       ),
     );
     return r == true;
   }
 
-  // مسح الكل: ملفات فولدر الإخراج + الصور المرتبة
+  // ظ…ط³ط­ ط§ظ„ظƒظ„: ظ…ظ„ظپط§طھ ظپظˆظ„ط¯ط± ط§ظ„ط¥ط®ط±ط§ط¬ + ط§ظ„طµظˆط± ط§ظ„ظ…ط±طھط¨ط©
   Future<void> clearAll() async {
     final protectedDirs = <String>{
       root,
@@ -3399,14 +3776,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (d.existsSync()) rawFiles.addAll(d.listSync().whereType<File>());
     } catch (_) {}
     if (outFiles.isEmpty && rawFiles.isEmpty) {
-      setState(() => status = 'مفيش حاجة للمسح.');
+      setState(() => status = 'ظ…ظپظٹط´ ط­ط§ط¬ط© ظ„ظ„ظ…ط³ط­.');
       return;
     }
     final ok = await _confirm(
-      'مسح الكل',
-      'هتتمسح ${outFiles.length} ملف من الإخراج:\n$outputDir\n\n'
-          'و ${rawFiles.length} صورة من الصور المرتبة.'
-          '${isProtected ? '\n\n(فولدر الإخراج ده عام، فهيتمسح بس ملفات التطبيق منه)' : ''}',
+      'ظ…ط³ط­ ط§ظ„ظƒظ„',
+      'ظ‡طھطھظ…ط³ط­ ${outFiles.length} ظ…ظ„ظپ ظ…ظ† ط§ظ„ط¥ط®ط±ط§ط¬:\n$outputDir\n\n'
+          'ظˆ ${rawFiles.length} طµظˆط±ط© ظ…ظ† ط§ظ„طµظˆط± ط§ظ„ظ…ط±طھط¨ط©.'
+          '${isProtected ? '\n\n(ظپظˆظ„ط¯ط± ط§ظ„ط¥ط®ط±ط§ط¬ ط¯ظ‡ ط¹ط§ظ…طŒ ظپظ‡ظٹطھظ…ط³ط­ ط¨ط³ ظ…ظ„ظپط§طھ ط§ظ„طھط·ط¨ظٹظ‚ ظ…ظ†ظ‡)' : ''}',
     );
     if (!ok) return;
     var n = 0;
@@ -3426,7 +3803,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       standardXlsxPath = null;
       generatedPdfPath = null;
       extraPdfPaths = [];
-      status = 'تم مسح $n ملف.';
+      status = 'طھظ… ظ…ط³ط­ $n ظ…ظ„ظپ.';
     });
   }
 
@@ -3434,7 +3811,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final list = processedItems.where((e) => e.needsReview).toList();
     if (list.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('مفيش إيصالات محتاجة مراجعة.')),
+        const SnackBar(content: Text('ظ…ظپظٹط´ ط¥ظٹطµط§ظ„ط§طھ ظ…ط­طھط§ط¬ط© ظ…ط±ط§ط¬ط¹ط©.')),
       );
       return;
     }
@@ -3449,7 +3826,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  // القلم: شاشة كاملة فيها الإيصال بزوم + تعديل المبلغ والماكينة
+  // ط§ظ„ظ‚ظ„ظ…: ط´ط§ط´ط© ظƒط§ظ…ظ„ط© ظپظٹظ‡ط§ ط§ظ„ط¥ظٹطµط§ظ„ ط¨ط²ظˆظ… + طھط¹ط¯ظٹظ„ ط§ظ„ظ…ط¨ظ„ط؛ ظˆط§ظ„ظ…ط§ظƒظٹظ†ط©
   Future<void> editReceipt(ReceiptItem item) async {
     final changed = await Navigator.push<bool>(
       context,
@@ -3481,10 +3858,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (File(p).existsSync()) files.add(XFile(p));
     }
     if (files.isNotEmpty) {
-      await Share.shareXFiles(files, text: 'تقرير إيصالات الإسكندرية (الرسمي)');
+      if (!await confirmSend(context,
+          review: processedItems.where((e) => e.needsReview).length, missing: missingTerminals.length)) {
+        return;
+      }
+      await Share.shareXFiles(files, text: 'طھظ‚ط±ظٹط± ط§ظ„ط¥ظٹطµط§ظ„ط§طھ (ط§ظ„ط±ط³ظ…ظٹ)');
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('لم يتم إنشاء ملفات بعد لمشاركتها.')),
+        const SnackBar(content: Text('ظ„ظ… ظٹطھظ… ط¥ظ†ط´ط§ط، ظ…ظ„ظپط§طھ ط¨ط¹ط¯ ظ„ظ…ط´ط§ط±ظƒطھظ‡ط§.')),
       );
     }
   }
@@ -3495,10 +3876,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (File(p).existsSync()) files.add(XFile(p));
     }
     if (files.isNotEmpty) {
-      await Share.shareXFiles(files, text: 'لوج التقفيل (تقرير المراجعة + OCR)');
+      await Share.shareXFiles(files, text: 'ظ„ظˆط¬ ط§ظ„طھظ‚ظپظٹظ„ (طھظ‚ط±ظٹط± ط§ظ„ظ…ط±ط§ط¬ط¹ط© + OCR)');
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ملفات المراجعة غير متاحة حالياً.')),
+        const SnackBar(content: Text('ظ…ظ„ظپط§طھ ط§ظ„ظ…ط±ط§ط¬ط¹ط© ط؛ظٹط± ظ…طھط§ط­ط© ط­ط§ظ„ظٹط§ظ‹.')),
       );
     }
   }
@@ -3511,7 +3892,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlgState) => AlertDialog(
-          title: const Text('تعديل بيانات الإيصال'),
+          title: const Text('طھط¹ط¯ظٹظ„ ط¨ظٹط§ظ†ط§طھ ط§ظ„ط¥ظٹطµط§ظ„'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -3521,12 +3902,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 TextField(
                   controller: amtController,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: InputDecoration(labelText: tr('المبلغ الإجمالي')),
+                  decoration: InputDecoration(labelText: tr('ط§ظ„ظ…ط¨ظ„ط؛ ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ')),
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<int>(
                   value: selectedOrder,
-                  hint: const Text('اختر الماكينة'),
+                  hint: const Text('ط§ط®طھط± ط§ظ„ظ…ط§ظƒظٹظ†ط©'),
                   items: [
                     for (final i in machineNums())
                       DropdownMenuItem(
@@ -3540,7 +3921,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ط¥ظ„ط؛ط§ط،')),
             FilledButton(
               onPressed: () {
                 final newAmt = double.tryParse(amtController.text) ?? item.amount;
@@ -3561,7 +3942,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 Navigator.pop(ctx);
                 rebuildFiles();
               },
-              child: const Text('حفظ وتحديث الملفات'),
+              child: const Text('ط­ظپط¸ ظˆطھط­ط¯ظٹط« ط§ظ„ظ…ظ„ظپط§طھ'),
             ),
           ],
         ),
@@ -3570,19 +3951,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> rebuildFiles() async {
-    setState(() => status = 'جاري توليد الملفات وتحديث الشيتات...');
+    setState(() => status = 'ط¬ط§ط±ظٹ طھظˆظ„ظٹط¯ ط§ظ„ظ…ظ„ظپط§طھ ظˆطھط­ط¯ظٹط« ط§ظ„ط´ظٹطھط§طھ...');
     final dateCounts = <String, int>{};
     for (final r in processedItems) {
       if (r.date != null) {
         dateCounts[r.date!] = (dateCounts[r.date!] ?? 0) + 1;
       }
     }
-    String reportDate = "اليوم";
+    String reportDate = "ط§ظ„ظٹظˆظ…";
     if (dateCounts.isNotEmpty) {
       reportDate = dateCounts.entries.reduce((a, b) => a.value > b.value ? a : b).key;
     }
 
-    // 1. ملفات الـ PDF المجمعة: واحد ليوم التقفيل، وواحد لكل يوم تاني لو فيه إيصالات بتاريخ مختلف
+    // 1. ظ…ظ„ظپط§طھ ط§ظ„ظ€ PDF ط§ظ„ظ…ط¬ظ…ط¹ط©: ظˆط§ط­ط¯ ظ„ظٹظˆظ… ط§ظ„طھظ‚ظپظٹظ„طŒ ظˆظˆط§ط­ط¯ ظ„ظƒظ„ ظٹظˆظ… طھط§ظ†ظٹ ظ„ظˆ ظپظٹظ‡ ط¥ظٹطµط§ظ„ط§طھ ط¨طھط§ط±ظٹط® ظ…ط®طھظ„ظپ
     processedItems.sort((a, b) {
       final c = (a.orderNum ?? 99).compareTo(b.orderNum ?? 99);
       return c != 0 ? c : (a.suffix ?? 1).compareTo(b.suffix ?? 1);
@@ -3604,8 +3985,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       for (final r in items) {
         pageNo++;
         if (!File(r.path).existsSync()) continue;
-        setState(() => status = 'جاري تجهيز صفحات الـ PDF ($pageNo / ${processedItems.length})...');
-        // سكانر: قص الباتش بس + فرد المنظور + تحسين. لو فشل نستخدم الصورة الأصلية.
+        setState(() => status = 'ط¬ط§ط±ظٹ طھط¬ظ‡ظٹط² طµظپط­ط§طھ ط§ظ„ظ€ PDF ($pageNo / ${processedItems.length})...');
+        // ط³ظƒط§ظ†ط±: ظ‚طµ ط§ظ„ط¨ط§طھط´ ط¨ط³ + ظپط±ط¯ ط§ظ„ظ…ظ†ط¸ظˆط± + طھط­ط³ظٹظ†. ظ„ظˆ ظپط´ظ„ ظ†ط³طھط®ط¯ظ… ط§ظ„طµظˆط±ط© ط§ظ„ط£طµظ„ظٹط©.
         var srcs = <String>[];
         try {
           srcs = await scanReceiptAsync(r.path);
@@ -3631,16 +4012,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       return true;
     }
 
-    final pdfOutFile = File('$outputDir/الاسكندريه $reportDate.pdf');
+    final pdfOutFile = File('$outputDir/ظ†طھظٹط¬ط© $reportDate.pdf');
     await buildPdf(mainItems, pdfOutFile);
     generatedPdfPath = pdfOutFile.path;
     extraPdfPaths = [];
     for (final e in otherByDate.entries) {
-      final f = File('$outputDir/الاسكندريه ${e.key}.pdf');
+      final f = File('$outputDir/ظ†طھظٹط¬ط© ${e.key}.pdf');
       if (await buildPdf(e.value, f)) extraPdfPaths.add(f.path);
     }
 
-    // حساب إجماليات كل وحدة
+    // ط­ط³ط§ط¨ ط¥ط¬ظ…ط§ظ„ظٹط§طھ ظƒظ„ ظˆط­ط¯ط©
     final unitTotals = <int, double>{};
     for (final r in rowNames.keys) {
       unitTotals[r] = 0.0;
@@ -3651,29 +4032,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
     }
 
-    // الإكسيل: نفس القالب بالظبط، بنكتب بس عمود D (مبلغ كل وحدة) و F (الإجمالي)
-    var xlsxLine = '• تم توليد الإكسيل: الاسكندريه $reportDate.xlsx';
+    // ط§ظ„ط¥ظƒط³ظٹظ„: ظ†ظپط³ ط§ظ„ظ‚ط§ظ„ط¨ ط¨ط§ظ„ط¸ط¨ط·طŒ ط¨ظ†ظƒطھط¨ ط¨ط³ ط¹ظ…ظˆط¯ D (ظ…ط¨ظ„ط؛ ظƒظ„ ظˆط­ط¯ط©) ظˆ F (ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ)
+    var xlsxLine = 'â€¢ طھظ… طھظˆظ„ظٹط¯ ط§ظ„ط¥ظƒط³ظٹظ„: ظ†طھظٹط¬ط© $reportDate.xlsx';
     standardXlsxPath = null;
     final tpl = await loadTemplateBytes();
     if (tpl == null) {
-      xlsxLine = '⚠️ قالب "الاسكندريه 00.xlsx" مش موجود في فولدر all (ولا مضاف للتطبيق)، فمتعملش إكسيل.';
+      xlsxLine = 'âڑ ï¸ڈ ظ‚ط§ظ„ط¨ ط´ظٹطھ ط§ظ„ظ†طھظٹط¬ط© (template.xlsx) ظ…ط´ ظ…ظˆط¬ظˆط¯ ظپظٹ ظپظˆظ„ط¯ط± ط§ظ„طھط·ط¨ظٹظ‚ (ظˆظ„ط§ ظ…ط¶ط§ظپ ظ„ظ„طھط·ط¨ظٹظ‚)طŒ ظپظ…طھط¹ظ…ظ„ط´ ط¥ظƒط³ظٹظ„.';
     } else {
       try {
         final unitRows = rowNames.keys.toList()..sort();
         final outBytes = fillTemplate(tpl, [
           for (final r in unitRows)
             _UnitOut(
-              rowNames[r] ?? 'وحدة $r',
+              rowNames[r] ?? 'ظˆط­ط¯ط© $r',
               terminals.values.where((t) => t.excelRow == r).length,
               unitTotals[r] ?? 0.0,
             ),
         ]);
-        final stdFile = File('$outputDir/الاسكندريه $reportDate.xlsx');
+        final stdFile = File('$outputDir/ظ†طھظٹط¬ط© $reportDate.xlsx');
         stdFile.createSync(recursive: true);
         stdFile.writeAsBytesSync(outBytes);
         standardXlsxPath = stdFile.path;
       } catch (e) {
-        xlsxLine = '⚠️ فشل ملء القالب: $e';
+        xlsxLine = 'âڑ ï¸ڈ ظپط´ظ„ ظ…ظ„ط، ط§ظ„ظ‚ط§ظ„ط¨: $e';
       }
     }
 
@@ -3691,44 +4072,44 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     ];
     writeReport(reportDate);
 
-    setState(() => status = 'اكتمل!\n'
+    setState(() => status = 'ط§ظƒطھظ…ظ„!\n'
         '$xlsxLine\n'
-        '• تم توليد ملف الـ PDF المجمع.' +
+        'â€¢ طھظ… طھظˆظ„ظٹط¯ ظ…ظ„ظپ ط§ظ„ظ€ PDF ط§ظ„ظ…ط¬ظ…ط¹.' +
         (extraPdfPaths.isEmpty
             ? ''
-            : '\n• فيه إيصالات بتواريخ تانية (${otherByDate.keys.join(' ، ')}): اتعمل لها PDF منفصل لكل يوم، ومش داخلة في إجماليات يوم $reportDate.') +
+            : '\nâ€¢ ظپظٹظ‡ ط¥ظٹطµط§ظ„ط§طھ ط¨طھظˆط§ط±ظٹط® طھط§ظ†ظٹط© (${otherByDate.keys.join(' طŒ ')}): ط§طھط¹ظ…ظ„ ظ„ظ‡ط§ PDF ظ…ظ†ظپطµظ„ ظ„ظƒظ„ ظٹظˆظ…طŒ ظˆظ…ط´ ط¯ط§ط®ظ„ط© ظپظٹ ط¥ط¬ظ…ط§ظ„ظٹط§طھ ظٹظˆظ… $reportDate.') +
         (sourceNote.isEmpty ? '' : '\n$sourceNote'));
   }
 
   String subtitleOf(ReceiptItem item) {
-    final sfx = item.suffix != null ? ' (باتش ${item.suffix})' : '';
+    final sfx = item.suffix != null ? ' (ط¨ط§طھط´ ${item.suffix})' : '';
     final bt = item.batches.length > 1
         ? '\n= ${item.batches.map((b) => b.toStringAsFixed(2)).join(' + ')}'
         : '';
-    final alt = item.alt != null ? '\n⚠️ قراءة تانية: ${item.alt!.toStringAsFixed(2)}' : '';
+    final alt = item.alt != null ? '\nâڑ ï¸ڈ ظ‚ط±ط§ط،ط© طھط§ظ†ظٹط©: ${item.alt!.toStringAsFixed(2)}' : '';
     final extra = StringBuffer();
     if (item.ignoredDoc) {
-      extra.write('\n📄 اتجاهلته: شكله إيصال دفع/مستند مش باتش - راجعه');
+      extra.write('\nًں“„ ط§طھط¬ط§ظ‡ظ„طھظ‡: ط´ظƒظ„ظ‡ ط¥ظٹطµط§ظ„ ط¯ظپط¹/ظ…ط³طھظ†ط¯ ظ…ط´ ط¨ط§طھط´ - ط±ط§ط¬ط¹ظ‡');
     }
     if (item.dateOdd) {
-      extra.write('\n📅 تاريخه ${item.date} والأغلب ${item.dateMain}');
+      extra.write('\nًں“… طھط§ط±ظٹط®ظ‡ ${item.date} ظˆط§ظ„ط£ط؛ظ„ط¨ ${item.dateMain}');
     }
     if (!item.ignoredDoc && !item.userExcluded && !item.dupSuspect && item.weakId && item.row != null) {
-      extra.write('\n❓ الماكينة/الوحدة اتحددت تلقائياً - اتأكد');
+      extra.write('\nâ‌“ ط§ظ„ظ…ط§ظƒظٹظ†ط©/ط§ظ„ظˆط­ط¯ط© ط§طھط­ط¯ط¯طھ طھظ„ظ‚ط§ط¦ظٹط§ظ‹ - ط§طھط£ظƒط¯');
     }
-    final unu = item.unusual != null ? '\n📊 ${item.unusual}' : '';
+    final unu = item.unusual != null ? '\nًں“ٹ ${item.unusual}' : '';
     final dup = item.dupSuspect
-        ? '\n⚠️ مشكوك إنه مكرر (نفس مبلغ ماكينة ${item.dupOf ?? ''}) - مش محسوب لحد ما تراجعه'
+        ? '\nâڑ ï¸ڈ ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط± (ظ†ظپط³ ظ…ط¨ظ„ط؛ ظ…ط§ظƒظٹظ†ط© ${item.dupOf ?? ''}) - ظ…ط´ ظ…ط­ط³ظˆط¨ ظ„ط­ط¯ ظ…ط§ طھط±ط§ط¬ط¹ظ‡'
         : item.userExcluded
-            ? '\n🚫 مستبعد (مكرر)'
+            ? '\nًںڑ« ظ…ط³طھط¨ط¹ط¯ (ظ…ظƒط±ط±)'
             : '';
-    return 'TID: ${item.tid ?? 'غير محدد'}$sfx | المبلغ: ${item.amount.toStringAsFixed(2)} ج.م$bt$alt$dup$unu$extra';
+    return 'TID: ${item.tid ?? 'ط؛ظٹط± ظ…ط­ط¯ط¯'}$sfx | ط§ظ„ظ…ط¨ظ„ط؛: ${item.amount.toStringAsFixed(2)} ط¬.ظ…$bt$alt$dup$unu$extra';
   }
 
   String warningsText() {
-    final sb = StringBuffer('ملاحظات للمراجعة (${warnings.length}):');
+    final sb = StringBuffer('ظ…ظ„ط§ط­ط¸ط§طھ ظ„ظ„ظ…ط±ط§ط¬ط¹ط© (${warnings.length}):');
     for (final w in warnings) {
-      sb.write('\n• $w');
+      sb.write('\nâ€¢ $w');
     }
     return sb.toString();
   }
@@ -3736,33 +4117,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void writeReport(String date) {
     try {
       final line = '=' * 50;
-      final sb = StringBuffer('تقرير المراجعة - $date\n$line\n');
+      final sb = StringBuffer('طھظ‚ط±ظٹط± ط§ظ„ظ…ط±ط§ط¬ط¹ط© - $date\n$line\n');
       var total = 0.0;
       for (final r in processedItems) {
         final flags = <String>[];
-        if (r.dupSuspect) flags.add('مشكوك إنه مكرر - مش محسوب لحد ما تراجعه');
-        if (r.userExcluded) flags.add('مستبعد');
-        if (r.ignoredDoc) flags.add('صورة متجاهلة - محتاجة قرار');
-        if (r.dateOdd) flags.add('تاريخ مختلف ${r.date}');
-        if (r.unusual != null) flags.add('إجمالي بعيد عن المعتاد');
-        if (r.amount <= 0) flags.add('المبلغ غير مقروء');
-        if (r.row == null) flags.add('الوحدة غير معروفة');
-        if (!r.ok && r.amount > 0) flags.add('المبلغ يحتاج مراجعة');
+        if (r.dupSuspect) flags.add('ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط± - ظ…ط´ ظ…ط­ط³ظˆط¨ ظ„ط­ط¯ ظ…ط§ طھط±ط§ط¬ط¹ظ‡');
+        if (r.userExcluded) flags.add('ظ…ط³طھط¨ط¹ط¯');
+        if (r.ignoredDoc) flags.add('طµظˆط±ط© ظ…طھط¬ط§ظ‡ظ„ط© - ظ…ط­طھط§ط¬ط© ظ‚ط±ط§ط±');
+        if (r.dateOdd) flags.add('طھط§ط±ظٹط® ظ…ط®طھظ„ظپ ${r.date}');
+        if (r.unusual != null) flags.add('ط¥ط¬ظ…ط§ظ„ظٹ ط¨ط¹ظٹط¯ ط¹ظ† ط§ظ„ظ…ط¹طھط§ط¯');
+        if (r.amount <= 0) flags.add('ط§ظ„ظ…ط¨ظ„ط؛ ط؛ظٹط± ظ…ظ‚ط±ظˆط،');
+        if (r.row == null) flags.add('ط§ظ„ظˆط­ط¯ط© ط؛ظٹط± ظ…ط¹ط±ظˆظپط©');
+        if (!r.ok && r.amount > 0) flags.add('ط§ظ„ظ…ط¨ظ„ط؛ ظٹط­طھط§ط¬ ظ…ط±ط§ط¬ط¹ط©');
         if (r.how == 'auto-number' || r.how == 'conflict' || r.how == 'extra-batch') {
-          flags.add('رقم الماكينة: ${r.how}');
+          flags.add('ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط©: ${r.how}');
         }
-        if (r.batches.length > 1) flags.add('${r.batches.length} باتشات');
-        if (r.alt != null) flags.add('قراءة تانية: ${r.alt!.toStringAsFixed(2)}');
+        if (r.batches.length > 1) flags.add('${r.batches.length} ط¨ط§طھط´ط§طھ');
+        if (r.alt != null) flags.add('ظ‚ط±ط§ط،ط© طھط§ظ†ظٹط©: ${r.alt!.toStringAsFixed(2)}');
         if (r.amount > 0 && r.row != null && r.counts) total += r.amount;
-        final mark = flags.isEmpty ? '✓' : '⚠️';
+        final mark = flags.isEmpty ? 'âœ“' : 'âڑ ï¸ڈ';
         final extra = flags.isEmpty ? '' : '   [${flags.join(' | ')}]';
         sb.writeln('$mark ${baseName(r.path)}  ${r.unitName ?? '??'}  '
             '${r.amount.toStringAsFixed(2)}$extra');
       }
       sb.writeln(line);
-      sb.writeln('الإجمالي العام: ${total.toStringAsFixed(2)} ج.م');
+      sb.writeln('ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ ط§ظ„ط¹ط§ظ…: ${total.toStringAsFixed(2)} ط¬.ظ…');
       if (missingTerminals.isNotEmpty) {
-        sb.writeln('ماكينات ناقصة: ${missingTerminals.join(' ، ')}');
+        sb.writeln('ظ…ط§ظƒظٹظ†ط§طھ ظ†ط§ظ‚طµط©: ${missingTerminals.join(' طŒ ')}');
       }
       for (final w in warnings) {
         sb.writeln('- $w');
@@ -3779,7 +4160,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     } catch (_) {}
     try {
       await _chan.invokeMethod('startKeepAlive',
-          {'title': 'A2R POS', 'text': 'جاري فحص الإيصالات...'});
+          {'title': 'A2R POS', 'text': 'ط¬ط§ط±ظٹ ظپط­طµ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ...'});
     } catch (_) {}
     try {
       await _chan.invokeMethod('keepScreenOn', {'on': true});
@@ -3795,11 +4176,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       } catch (_) {}
       if (_life != AppLifecycleState.resumed) {
         final rv = processedItems.where((e) => e.needsReview).length;
-        final txt = 'تم فحص ${processedItems.length} إيصال'
-            '${missingTerminals.isNotEmpty ? ' - ناقص ${missingTerminals.length} ماكينة' : ''}'
-            '${rv > 0 ? ' - $rv للمراجعة' : ''}';
+        final txt = 'طھظ… ظپط­طµ ${processedItems.length} ط¥ظٹطµط§ظ„'
+            '${missingTerminals.isNotEmpty ? ' - ظ†ط§ظ‚طµ ${missingTerminals.length} ظ…ط§ظƒظٹظ†ط©' : ''}'
+            '${rv > 0 ? ' - $rv ظ„ظ„ظ…ط±ط§ط¬ط¹ط©' : ''}';
         try {
-          await _chan.invokeMethod('notify', {'title': tr('A2R POS - انتهى الفحص'), 'text': tr(txt)});
+          await _chan.invokeMethod('notify', {'title': tr('A2R POS - ط§ظ†طھظ‡ظ‰ ط§ظ„ظپط­طµ'), 'text': tr(txt)});
         } catch (_) {}
       }
     }
@@ -3808,7 +4189,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Future<void> _runPipelineInner({List<String>? manualPaths}) async {
     final perm = await Permission.manageExternalStorage.request();
     if (!perm.isGranted) {
-      setState(() => status = 'يجب منح إذن الوصول إلى جميع الملفات للمتابعة.');
+      setState(() => status = 'ظٹط¬ط¨ ظ…ظ†ط­ ط¥ط°ظ† ط§ظ„ظˆطµظˆظ„ ط¥ظ„ظ‰ ط¬ظ…ظٹط¹ ط§ظ„ظ…ظ„ظپط§طھ ظ„ظ„ظ…طھط§ط¨ط¹ط©.');
       return;
     }
     await loadSettingsFromExcel();
@@ -3820,7 +4201,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       missingTerminals.clear();
       warnings.clear();
       excludedPay.clear();
-      status = 'جاري البحث عن مجلدات الصور...';
+      status = 'ط¬ط§ط±ظٹ ط§ظ„ط¨ط­ط« ط¹ظ† ظ…ط¬ظ„ط¯ط§طھ ط§ظ„طµظˆط±...';
     });
 
     final dirs = customDir != null ? [Directory(customDir!)] : findWhatsAppImageDirs();
@@ -3852,10 +4233,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     sourceNote = '';
     if (manualPaths != null) {
       todo.addAll(manualPaths.map((p) => File(p)));
-      sourceNote = '• المصدر: صور محددة يدوياً (${todo.length} صورة)';
+      sourceNote = 'â€¢ ط§ظ„ظ…طµط¯ط±: طµظˆط± ظ…ط­ط¯ط¯ط© ظٹط¯ظˆظٹط§ظ‹ (${todo.length} طµظˆط±ط©)';
     }
 
-    // فولدر اخترته بإيدك (مش واتساب): أي ملف PDF جواه بيتفحص، بأي اسم وبأي تاريخ
+    // ظپظˆظ„ط¯ط± ط§ط®طھط±طھظ‡ ط¨ط¥ظٹط¯ظƒ (ظ…ط´ ظˆط§طھط³ط§ط¨): ط£ظٹ ظ…ظ„ظپ PDF ط¬ظˆط§ظ‡ ط¨ظٹطھظپط­طµطŒ ط¨ط£ظٹ ط§ط³ظ… ظˆط¨ط£ظٹ طھط§ط±ظٹط®
     if (customDir != null && customDir != outputDir) {
       final cpdfs = <File>[];
       try {
@@ -3868,7 +4249,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       var pdfPages = 0;
       final used = <String>[];
       for (final pf in cpdfs) {
-        setState(() => status = 'بقرأ صفحات ملف PDF: ${baseName(pf.path)}...');
+        setState(() => status = 'ط¨ظ‚ط±ط£ طµظپط­ط§طھ ظ…ظ„ظپ PDF: ${baseName(pf.path)}...');
         final pages = await extractPdfPages(pf);
         if (pages.isEmpty) continue;
         todo.addAll(pages);
@@ -3876,13 +4257,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         used.add(baseName(pf.path));
       }
       if (used.isNotEmpty) {
-        sourceNote = '• المصدر: ملف PDF ${used.take(3).join(' ، ')}${used.length > 3 ? ' ...' : ''} ($pdfPages صفحة)';
+        sourceNote = 'â€¢ ط§ظ„ظ…طµط¯ط±: ظ…ظ„ظپ PDF ${used.take(3).join(' طŒ ')}${used.length > 3 ? ' ...' : ''} ($pdfPages طµظپط­ط©)';
       }
     }
 
-    // مفيش صور؟ دوّر على PDF اسمه "الاسكندريه + تاريخ النهارده"
+    // ظ…ظپظٹط´ طµظˆط±طں ط¯ظˆظ‘ط± ط¹ظ„ظ‰ PDF طھظ‚ظپظٹظ„ ط¨طھط§ط±ظٹط® ط§ظ„ظ†ظ‡ط§ط±ط¯ظ‡
     if (todo.isEmpty) {
-      setState(() => status = 'مفيش صور. بدوّر على ملف PDF اسمه "الاسكندريه ${todayToken()}"...');
+      setState(() => status = 'ظ…ظپظٹط´ طµظˆط±. ط¨ط¯ظˆظ‘ط± ط¹ظ„ظ‰ ظ…ظ„ظپ PDF طھظ‚ظپظٹظ„ ط¨طھط§ط±ظٹط® ${todayToken()}...');
       final searchDirs = <String>[];
       if (customDir != null) searchDirs.add(customDir!);
       for (final d in findWhatsAppImageDirs()) {
@@ -3897,7 +4278,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final pages = await extractPdfPages(pdfs.first);
         if (pages.isNotEmpty) {
           todo.addAll(pages);
-          sourceNote = '• المصدر: ملف PDF ${baseName(pdfs.first.path)} (${pages.length} صفحة)';
+          sourceNote = 'â€¢ ط§ظ„ظ…طµط¯ط±: ظ…ظ„ظپ PDF ${baseName(pdfs.first.path)} (${pages.length} طµظپط­ط©)';
         }
       }
     }
@@ -3906,11 +4287,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       setState(() {
         busy = false;
         status = customDir != null
-            ? 'مفيش صور (في الفترة المحددة) ولا ملفات PDF في المجلد المختار.'
+            ? 'ظ…ظپظٹط´ طµظˆط± (ظپظٹ ط§ظ„ظپطھط±ط© ط§ظ„ظ…ط­ط¯ط¯ط©) ظˆظ„ط§ ظ…ظ„ظپط§طھ PDF ظپظٹ ط§ظ„ظ…ط¬ظ„ط¯ ط§ظ„ظ…ط®طھط§ط±.'
             : (dirs.isEmpty
-                    ? 'تعذر العثور على مجلد صور الواتساب تلقائياً.'
-                    : 'لا توجد صور في مجلد الواتساب بالفترة المحددة.') +
-                '\nولا يوجد ملف PDF باسم "الاسكندريه ${todayToken()}".';
+                    ? 'طھط¹ط°ط± ط§ظ„ط¹ط«ظˆط± ط¹ظ„ظ‰ ظ…ط¬ظ„ط¯ طµظˆط± ط§ظ„ظˆط§طھط³ط§ط¨ طھظ„ظ‚ط§ط¦ظٹط§ظ‹.'
+                    : 'ظ„ط§ طھظˆط¬ط¯ طµظˆط± ظپظٹ ظ…ط¬ظ„ط¯ ط§ظ„ظˆط§طھط³ط§ط¨ ط¨ط§ظ„ظپطھط±ط© ط§ظ„ظ…ط­ط¯ط¯ط©.') +
+                '\nظˆظ„ط§ ظٹظˆط¬ط¯ ظ…ظ„ظپ PDF طھظ‚ظپظٹظ„ ط¨طھط§ط±ظٹط® ${todayToken()}.';
       });
       return;
     }
@@ -3925,7 +4306,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final rawReceipts = <ReceiptItem>[];
     final ignoredItems = <ReceiptItem>[];
 
-    // ═════════ المرحلة 1: قراءة الصور ═════════
+    // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ ط§ظ„ظ…ط±ط­ظ„ط© 1: ظ‚ط±ط§ط،ط© ط§ظ„طµظˆط± â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
     for (var i = 0; i < todo.length; i++) {
       final f = todo[i];
       try {
@@ -3936,15 +4317,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final fxm = fixes[fkey];
         final ign = (fxm is Map && fxm['ign'] is String) ? fxm['ign'] as String : null;
         var isReceipt = receiptScore(res.text) >= 2 || findTerminalIn([res.text]) != null;
-        if (ign == 'keep') isReceipt = true; // قررت قبل كده إنها باتش
-        // إيصال دفع أو مستند مش باتش/ملخص/ري برنت: بيدخل المراجعة (مش بيتتجاهل نهائي)
+        if (ign == 'keep') isReceipt = true; // ظ‚ط±ط±طھ ظ‚ط¨ظ„ ظƒط¯ظ‡ ط¥ظ†ظ‡ط§ ط¨ط§طھط´
+        // ط¥ظٹطµط§ظ„ ط¯ظپط¹ ط£ظˆ ظ…ط³طھظ†ط¯ ظ…ط´ ط¨ط§طھط´/ظ…ظ„ط®طµ/ط±ظٹ ط¨ط±ظ†طھ: ط¨ظٹط¯ط®ظ„ ط§ظ„ظ…ط±ط§ط¬ط¹ط© (ظ…ط´ ط¨ظٹطھطھط¬ط§ظ‡ظ„ ظ†ظ‡ط§ط¦ظٹ)
         var skipPay = false;
         if (isReceipt && ign != 'keep' && classifyReceipt(res.text) == 'payment') {
           isReceipt = false;
           skipPay = true;
         }
 
-        // صورة مقلوبة؟ جرّب EXIF ثم 90 / 270 / 180
+        // طµظˆط±ط© ظ…ظ‚ظ„ظˆط¨ط©طں ط¬ط±ظ‘ط¨ EXIF ط«ظ… 90 / 270 / 180
         if (!isReceipt && !skipPay && autoRotate) {
           for (final deg in const [0, 90, 270, 180]) {
             final tp = '$tmpDir/rot_$deg.jpg';
@@ -3967,9 +4348,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           final key = '${baseName(f.path)}:${f.lengthSync()}';
           final a = analyzeLines(toLines(res));
 
-          // قراءة تانية بتنسيق مختلف (صورة محسّنة) علشان نكشف الأخطاء
+          // ظ‚ط±ط§ط،ط© طھط§ظ†ظٹط© ط¨طھظ†ط³ظٹظ‚ ظ…ط®طھظ„ظپ (طµظˆط±ط© ظ…ط­ط³ظ‘ظ†ط©) ط¹ظ„ط´ط§ظ† ظ†ظƒط´ظپ ط§ظ„ط£ط®ط·ط§ط،
           double? alt;
-          // القراءة التانية بس للإيصالات اللي القراءة الأولى فيها مش مؤكدة (علشان السرعة)
+          // ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„طھط§ظ†ظٹط© ط¨ط³ ظ„ظ„ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ظ„ظٹ ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„ط£ظˆظ„ظ‰ ظپظٹظ‡ط§ ظ…ط´ ظ…ط¤ظƒط¯ط© (ط¹ظ„ط´ط§ظ† ط§ظ„ط³ط±ط¹ط©)
           final needSecond = !a.ok || a.tid == null || a.row == null || a.val <= 0;
           if (needSecond) {
             try {
@@ -4003,7 +4384,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 mode: FileMode.append);
           } catch (_) {}
 
-          // نسخة الصورة اللي هتدخل الـ PDF (متظبطة الاتجاه)
+          // ظ†ط³ط®ط© ط§ظ„طµظˆط±ط© ط§ظ„ظ„ظٹ ظ‡طھط¯ط®ظ„ ط§ظ„ظ€ PDF (ظ…طھط¸ط¨ط·ط© ط§ظ„ط§طھط¬ط§ظ‡)
           final inRaw = f.path.startsWith('$rawImagesDir/');
           final dst = inRaw ? f.path : '$rawImagesDir/wa_${baseName(f.path)}';
           File localFile;
@@ -4020,7 +4401,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           } else if (inRaw || File(dst).existsSync()) {
             localFile = File(dst);
           } else {
-            await fixImageAsync(f.path, dst, 0); // نسخ + تصحيح EXIF لو لازم
+            await fixImageAsync(f.path, dst, 0); // ظ†ط³ط® + طھطµط­ظٹط­ EXIF ظ„ظˆ ظ„ط§ط²ظ…
             localFile = File(dst);
           }
 
@@ -4038,8 +4419,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             batches: a.batches,
             alt: alt,
           );
+          item.txn = a.txn;
 
-          // تصحيح يدوي محفوظ من مرة سابقة
+          // طھطµط­ظٹط­ ظٹط¯ظˆظٹ ظ…ط­ظپظˆط¸ ظ…ظ† ظ…ط±ط© ط³ط§ط¨ظ‚ط©
           final fx = fixes[key];
           if (fx is Map) {
             final v = fx['val'];
@@ -4082,13 +4464,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           }
         }
       } catch (e) {
-        warnings.add('${baseName(f.path)}: فشلت القراءة (${e.toString().split('\n').first})');
+        warnings.add('${baseName(f.path)}: ظپط´ظ„طھ ط§ظ„ظ‚ط±ط§ط،ط© (${e.toString().split('\n').first})');
       }
 
       if (!mounted) return;
       setState(() {
         progress = ((i + 1) / todo.length) * 0.5;
-        status = 'فحص OCR: ${i + 1} من ${todo.length}';
+        status = 'ظپط­طµ OCR: ${i + 1} ظ…ظ† ${todo.length}';
       });
     }
 
@@ -4098,13 +4480,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       processedItems.addAll(ignoredItems);
       setState(() {
         busy = false;
-        status = 'تم فحص ${todo.length} صورة، ولم يتم العثور على إيصالات مطابقة.';
+        status = 'طھظ… ظپط­طµ ${todo.length} طµظˆط±ط©طŒ ظˆظ„ظ… ظٹطھظ… ط§ظ„ط¹ط«ظˆط± ط¹ظ„ظ‰ ط¥ظٹطµط§ظ„ط§طھ ظ…ط·ط§ط¨ظ‚ط©.';
       });
       return;
     }
 
-    // ═════════ المرحلة 2: التكرار وترقيم الماكينات ═════════
-    setState(() => status = 'مراجعة التكرار وترقيم الماكينات...');
+    // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ ط§ظ„ظ…ط±ط­ظ„ط© 2: ط§ظ„طھظƒط±ط§ط± ظˆطھط±ظ‚ظٹظ… ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+    setState(() => status = 'ظ…ط±ط§ط¬ط¹ط© ط§ظ„طھظƒط±ط§ط± ظˆطھط±ظ‚ظٹظ… ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ...');
     final prio = <String, int>{'manual': 0, 'terminal': 0, 'fuzzy': 1, 'file-number': 2};
     final withTid = rawReceipts.where((r) => r.tid != null).toList();
     withTid.sort((a, b) {
@@ -4122,19 +4504,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           (prev.amount - r.amount).abs() < 0.005 &&
           sameDay(prev, r)) {
         if (r.dupDecision == 'drop') {
-          r.userExcluded = true; // انت قررت قبل كده إنه مكرر (بيفضل ظاهر وتقدر ترجّعه)
+          r.userExcluded = true; // ط§ظ†طھ ظ‚ط±ط±طھ ظ‚ط¨ظ„ ظƒط¯ظ‡ ط¥ظ†ظ‡ ظ…ظƒط±ط± (ط¨ظٹظپط¶ظ„ ط¸ط§ظ‡ط± ظˆطھظ‚ط¯ط± طھط±ط¬ظ‘ط¹ظ‡)
           r.dupOf = n;
-          warnings.add('${baseName(r.path)}: إيصال مكرر للماكينة $n (استبعدته قبل كده - تقدر ترجّعه)');
+          warnings.add('${baseName(r.path)}: ط¥ظٹطµط§ظ„ ظ…ظƒط±ط± ظ„ظ„ظ…ط§ظƒظٹظ†ط© $n (ط§ط³طھط¨ط¹ط¯طھظ‡ ظ‚ط¨ظ„ ظƒط¯ظ‡ - طھظ‚ط¯ط± طھط±ط¬ظ‘ط¹ظ‡)');
         } else if (r.dupDecision == 'keep') {
-          r.origTid = r.tid; // انت قررت قبل كده إنه باتش تاني حقيقي
+          r.origTid = r.tid; // ط§ظ†طھ ظ‚ط±ط±طھ ظ‚ط¨ظ„ ظƒط¯ظ‡ ط¥ظ†ظ‡ ط¨ط§طھط´ طھط§ظ†ظٹ ط­ظ‚ظٹظ‚ظٹ
           r.tid = null;
           r.conflict = true;
         } else {
-          // نفس الماكينة ونفس المبلغ = مشكوك إنه مكرر: بيدخل المراجعة (مش بيتستبعد)
+          // ظ†ظپط³ ط§ظ„ظ…ط§ظƒظٹظ†ط© ظˆظ†ظپط³ ط§ظ„ظ…ط¨ظ„ط؛ = ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط±: ط¨ظٹط¯ط®ظ„ ط§ظ„ظ…ط±ط§ط¬ط¹ط© (ظ…ط´ ط¨ظٹطھط³طھط¨ط¹ط¯)
           r.dupSuspect = true;
           r.dupOf = n;
-          warnings.add('${baseName(r.path)}: نفس الماكينة $n ونفس المبلغ '
-              '${r.amount.toStringAsFixed(2)} (مشكوك إنه مكرر) - راجعه من زر المراجعة');
+          warnings.add('${baseName(r.path)}: ظ†ظپط³ ط§ظ„ظ…ط§ظƒظٹظ†ط© $n ظˆظ†ظپط³ ط§ظ„ظ…ط¨ظ„ط؛ '
+              '${r.amount.toStringAsFixed(2)} (ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط±) - ط±ط§ط¬ط¹ظ‡ ظ…ظ† ط²ط± ط§ظ„ظ…ط±ط§ط¬ط¹ط©');
         }
       } else {
         r.origTid = r.tid;
@@ -4159,7 +4541,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (r.skip || r.tid != null || r.row == null) continue;
       if (r.conflict &&
           (r.how == 'terminal' || r.how == 'fuzzy' || r.dupDecision == 'keep')) {
-        giveSuffix(r); // نفس الماكينة بمبلغ مختلف = باتش إضافي
+        giveSuffix(r); // ظ†ظپط³ ط§ظ„ظ…ط§ظƒظٹظ†ط© ط¨ظ…ط¨ظ„ط؛ ظ…ط®طھظ„ظپ = ط¨ط§طھط´ ط¥ط¶ط§ظپظٹ
         continue;
       }
       final free = <int>[];
@@ -4183,7 +4565,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     final kept = rawReceipts.where((r) => !r.skip).toList();
 
-    // التاريخ الأكثر تكراراً + تحذيرات
+    // ط§ظ„طھط§ط±ظٹط® ط§ظ„ط£ظƒط«ط± طھظƒط±ط§ط±ط§ظ‹ + طھط­ط°ظٹط±ط§طھ
     final dateVotes = <String, int>{};
     for (final r in kept) {
       if (r.date != null) dateVotes[r.date!] = (dateVotes[r.date!] ?? 0) + 1;
@@ -4193,28 +4575,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     for (final r in kept) {
       final nm = baseName(r.path);
       if (mainDate != null && r.date != null && r.date != mainDate && r.dateFix == null) {
-        r.dateOdd = true; // بيدخل المراجعة
+        r.dateOdd = true; // ط¨ظٹط¯ط®ظ„ ط§ظ„ظ…ط±ط§ط¬ط¹ط©
         r.dateMain = mainDate;
       }
       if (r.row != null && r.amount > 0) {
-        if (!r.ok) warnings.add('$nm: ${r.unitName} = ${r.amount.toStringAsFixed(2)} (راجع المبلغ يدوياً)');
+        if (!r.ok) warnings.add('$nm: ${r.unitName} = ${r.amount.toStringAsFixed(2)} (ط±ط§ط¬ط¹ ط§ظ„ظ…ط¨ظ„ط؛ ظٹط¯ظˆظٹط§ظ‹)');
         if (r.alt != null) {
-          warnings.add('$nm: القراءة التانية للمبلغ ${r.alt!.toStringAsFixed(2)} مختلفة عن ${r.amount.toStringAsFixed(2)} - راجع الصورة');
+          warnings.add('$nm: ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„طھط§ظ†ظٹط© ظ„ظ„ظ…ط¨ظ„ط؛ ${r.alt!.toStringAsFixed(2)} ظ…ط®طھظ„ظپط© ط¹ظ† ${r.amount.toStringAsFixed(2)} - ط±ط§ط¬ط¹ ط§ظ„طµظˆط±ط©');
         }
         if (r.how == 'extra-batch') {
-          warnings.add('$nm: الماكينة ${r.orderNum} ظهرت في صورة تانية بمبلغ مختلف - اتحسبت كباتش إضافي ${r.suffix}');
+          warnings.add('$nm: ط§ظ„ظ…ط§ظƒظٹظ†ط© ${r.orderNum} ط¸ظ‡ط±طھ ظپظٹ طµظˆط±ط© طھط§ظ†ظٹط© ط¨ظ…ط¨ظ„ط؛ ظ…ط®طھظ„ظپ - ط§طھط­ط³ط¨طھ ظƒط¨ط§طھط´ ط¥ط¶ط§ظپظٹ ${r.suffix}');
         } else if (r.how == 'auto-number' || r.how == 'conflict') {
-          warnings.add('$nm: رقم الماكينة اتحدد تلقائياً (${r.orderNum}) - اتأكد منه');
+          warnings.add('$nm: ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط© ط§طھط­ط¯ط¯ طھظ„ظ‚ط§ط¦ظٹط§ظ‹ (${r.orderNum}) - ط§طھط£ظƒط¯ ظ…ظ†ظ‡');
         } else if (!(r.how == 'terminal' || r.how == 'fuzzy' || r.how == 'manual')) {
-          warnings.add('$nm: الوحدة اتحددت بالاسم/الميرشانت فقط');
+          warnings.add('$nm: ط§ظ„ظˆط­ط¯ط© ط§طھط­ط¯ط¯طھ ط¨ط§ظ„ط§ط³ظ…/ط§ظ„ظ…ظٹط±ط´ط§ظ†طھ ظپظ‚ط·');
         }
       } else {
-        warnings.add('$nm: مش قادر أقرا المبلغ أو الوحدة - اضغط تعديل');
+        warnings.add('$nm: ظ…ط´ ظ‚ط§ط¯ط± ط£ظ‚ط±ط§ ط§ظ„ظ…ط¨ظ„ط؛ ط£ظˆ ط§ظ„ظˆط­ط¯ط© - ط§ط¶ط؛ط· طھط¹ط¯ظٹظ„');
       }
     }
 
-    // ═════════ المرحلة 3: إعادة التسمية (على مرحلتين عشان التعارض) ═════════
-    setState(() => status = 'إعادة تسمية الصور وترتيبها...');
+    // â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ ط§ظ„ظ…ط±ط­ظ„ط© 3: ط¥ط¹ط§ط¯ط© ط§ظ„طھط³ظ…ظٹط© (ط¹ظ„ظ‰ ظ…ط±ط­ظ„طھظٹظ† ط¹ط´ط§ظ† ط§ظ„طھط¹ط§ط±ط¶) â•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گâ•گ
+    setState(() => status = 'ط¥ط¹ط§ط¯ط© طھط³ظ…ظٹط© ط§ظ„طµظˆط± ظˆطھط±طھظٹط¨ظ‡ط§...');
     final moves = <ReceiptItem>[];
     final newNames = <ReceiptItem, String>{};
     var dupN = 0;
@@ -4281,6 +4663,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final pdf = latestOutput('.pdf');
     final reviewCount = processedItems.where((e) => e.needsReview).length;
     _syncBadge(homeBadge, reviewCount);
+    _publishClosing(processedItems);
+    homeBusyG = busy;
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 54,
@@ -4289,7 +4673,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         actions: [
           const HeaderButtons(),
           PopupMenuButton<String>(
-            tooltip: tr('المزيد'),
+            tooltip: tr('ط§ظ„ظ…ط²ظٹط¯'),
             onSelected: (v) {
               if (v == 'appearance') {
                 showAppearanceSheet(context);
@@ -4308,10 +4692,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     openFile(settingsPath, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('مقدرتش أعمل ملف الإعدادات. اتأكد من إذن الوصول لكل الملفات.')),
+                      const SnackBar(content: Text('ظ…ظ‚ط¯ط±طھط´ ط£ط¹ظ…ظ„ ظ…ظ„ظپ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ. ط§طھط£ظƒط¯ ظ…ظ† ط¥ط°ظ† ط§ظ„ظˆطµظˆظ„ ظ„ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ.')),
                     );
                   }
                 });
+              } else if (v == 'wipe') {
+                wipeEverything(context);
               } else if (v == 'clear') {
                 clearAll();
               }
@@ -4320,18 +4706,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               if (MediaQuery.sizeOf(context).width < 400)
                 PopupMenuItem(
                     value: 'appearance',
-                    child: w.Text(AppSettings.of(context).isAr ? 'المظهر واللغة' : 'Theme & language')),
-              const PopupMenuItem(value: 'folder', child: Text('فتح فولدر الإخراج')),
+                    child: w.Text(AppSettings.of(context).isAr ? 'ط§ظ„ظ…ط¸ظ‡ط± ظˆط§ظ„ظ„ط؛ط©' : 'Theme & language')),
+              const PopupMenuItem(value: 'folder', child: Text('ظپطھط­ ظپظˆظ„ط¯ط± ط§ظ„ط¥ط®ط±ط§ط¬')),
               if (customDir != null)
-                PopupMenuItem(value: 'src', enabled: !busy, child: const Text('المصدر: رجوع لواتساب')),
+                PopupMenuItem(value: 'src', enabled: !busy, child: const Text('ط§ظ„ظ…طµط¯ط±: ط±ط¬ظˆط¹ ظ„ظˆط§طھط³ط§ط¨')),
               if (customOut != null)
-                PopupMenuItem(value: 'out', enabled: !busy, child: const Text('الإخراج: الافتراضي')),
+                PopupMenuItem(value: 'out', enabled: !busy, child: const Text('ط§ظ„ط¥ط®ط±ط§ط¬: ط§ظ„ط§ظپطھط±ط§ط¶ظٹ')),
               PopupMenuItem(
                   value: 'log',
-                  child: w.Text(AppSettings.of(context).isAr ? 'مشاركة اللوج' : 'Share log')),
-              const PopupMenuItem(enabled: false, child: Text('الإصدار $kAppVersion')),
-              PopupMenuItem(value: 'settings', child: const Text('إعدادات الماكينات (إكسيل)')),
-              PopupMenuItem(value: 'clear', enabled: !busy, child: const Text('مسح الكل')),
+                  child: w.Text(AppSettings.of(context).isAr ? 'ظ…ط´ط§ط±ظƒط© ط§ظ„ظ„ظˆط¬' : 'Share log')),
+              const PopupMenuItem(enabled: false, child: Text('ط§ظ„ط¥طµط¯ط§ط± $kAppVersion')),
+              PopupMenuItem(value: 'settings', child: const Text('ط¥ط¹ط¯ط§ط¯ط§طھ ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ (ط¥ظƒط³ظٹظ„)')),
+              PopupMenuItem(value: 'clear', enabled: !busy, child: const Text('ظ…ط³ط­ ط§ظ„ظƒظ„')),
+              PopupMenuItem(
+                  value: 'wipe',
+                  enabled: !busy,
+                  child: w.Text(AppSettings.of(context).isAr ? 'ًں§¹ ظ…ط³ط­ ظƒظ„ ط­ط§ط¬ط© (ظƒط§ط´ + ظ…ط¤ظ‚طھ)' : 'ًں§¹ Wipe everything (cache + temp)')),
             ],
           ),
         ],
@@ -4340,7 +4730,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         FilledButton.icon(
           onPressed: busy ? null : runFullPipeline,
           icon: const Icon(Icons.play_arrow),
-          label: const Text('بدء المعالجة الشاملة'),
+          label: const Text('ط¨ط¯ط، ط§ظ„ظ…ط¹ط§ظ„ط¬ط© ط§ظ„ط´ط§ظ…ظ„ط©'),
         ),
         busy: busy,
         progress: progress,
@@ -4354,20 +4744,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               sharedDays.value = d;
             }),
             const Divider(height: 10),
-            _pathRow(Icons.folder_open, 'المصدر', customDir ?? 'واتساب (تلقائي)',
+            _pathRow(Icons.folder_open, 'ط§ظ„ظ…طµط¯ط±', customDir ?? 'ظˆط§طھط³ط§ط¨ (طھظ„ظ‚ط§ط¦ظٹ)',
                 busy ? null : pickFolder,
                 onReset: customDir != null && !busy ? useWhatsApp : null),
-            _pathRow(Icons.add_photo_alternate, 'اختيار صور يدوياً', 'فتح معرض الصور', busy ? null : pickManualImages),
-            _pathRow(Icons.drive_file_move_outline, 'الإخراج',
-                customOut ?? '$defaultOutputDir (افتراضي)', busy ? null : pickOutFolder,
+            _pathRow(Icons.add_photo_alternate, 'ط§ط®طھظٹط§ط± طµظˆط± ظٹط¯ظˆظٹط§ظ‹', 'ظپطھط­ ظ…ط¹ط±ط¶ ط§ظ„طµظˆط±', busy ? null : pickManualImages),
+            _pathRow(Icons.drive_file_move_outline, 'ط§ظ„ط¥ط®ط±ط§ط¬',
+                customOut ?? '$defaultOutputDir (ط§ظپطھط±ط§ط¶ظٹ)', busy ? null : pickOutFolder,
                 onReset: customOut != null && !busy ? useDefaultOut : null),
-            _switchRow('فحص الصور المقلوبة (أبطأ)', autoRotate,
+            _switchRow('ظپط­طµ ط§ظ„طµظˆط± ط§ظ„ظ…ظ‚ظ„ظˆط¨ط© (ط£ط¨ط·ط£)', autoRotate,
                 busy ? null : (v) => setState(() => autoRotate = v)),
           ]),
           _statusBox(status),
           const SizedBox(height: 6),
           if (processedItems.isNotEmpty) ...[
             _filterRow(reviewOnly, processedItems.length, reviewCount, (v) => setState(() => reviewOnly = v)),
+            if (reviewCount > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: w.Text(
+                    _l(context, 'ًں’، ط§ط³ط­ط¨ ط¥ظٹطµط§ظ„ ط§ظ„ظ…ط±ط§ط¬ط¹ط©: طµط­ âœ“ ظپظٹ ظ†ط§ط­ظٹط© ظˆط؛ظ„ط· âœ— ظپظٹ ط§ظ„ظ†ط§ط­ظٹط© ط§ظ„طھط§ظ†ظٹط©',
+                        'ًں’، Swipe a review receipt: OK âœ“ one way, wrong âœ— the other'),
+                    style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              ),
             const SizedBox(height: 6),
           ],
           Wrap(
@@ -4376,7 +4774,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             children: [
               _mini(
                   Icons.table_chart,
-                  'إكسيل',
+                  'ط¥ظƒط³ظٹظ„',
                   xlsx == null
                       ? null
                       : () => openFile(xlsx,
@@ -4385,8 +4783,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               _mini(Icons.picture_as_pdf, 'PDF',
                   pdf == null ? null : () => openFile(pdf, 'application/pdf'),
                   filled: true),
-              _mini(Icons.chat, 'واتساب', busy ? null : sendToWhatsApp),
-              _mini(Icons.fact_check, 'مراجعة ($reviewCount)', busy ? null : openReview),
+              _mini(Icons.chat, 'ظˆط§طھط³ط§ط¨', busy ? null : sendToWhatsApp),
+              _mini(Icons.fact_check, 'ظ…ط±ط§ط¬ط¹ط© ($reviewCount)', busy ? null : openReview),
             ],
           ),
           if (missingTerminals.isNotEmpty) ...[
@@ -4402,7 +4800,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '⚠️ ماكينات ناقصة (${missingTerminals.length} من ${terminals.length}):',
+                    'âڑ ï¸ڈ ظ…ط§ظƒظٹظ†ط§طھ ظ†ط§ظ‚طµط© (${missingTerminals.length} ظ…ظ† ${terminals.length}):',
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: _tintFg(context, Colors.amber),
@@ -4412,7 +4810,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   Text(
                     missingTerminals
                         .map((n) => '$n (${terminals[numToTid[n]]?.unitName ?? ''})')
-                        .join(' ، '),
+                        .join(' طŒ '),
                     style: const TextStyle(fontSize: 13),
                   ),
                 ],
@@ -4436,7 +4834,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ],
           const SizedBox(height: 10),
           for (final item in processedItems.where((e) => !reviewOnly || e.needsReview))
-            Card(
+            _swipeWrap(item, Card(
               margin: const EdgeInsets.symmetric(vertical: 4),
               child: ListTile(
                 onTap: () => Navigator.push(
@@ -4444,7 +4842,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   MaterialPageRoute(
                     builder: (_) => ReceiptZoomPage(
                       path: item.path,
-                      title: 'ماكينة ${item.orderNum ?? '؟'} - ${item.unitName ?? ''}',
+                      title: 'ظ…ط§ظƒظٹظ†ط© ${item.orderNum ?? 'طں'} - ${item.unitName ?? ''}',
                     ),
                   ),
                 ),
@@ -4456,8 +4854,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
                 title: Text(
                   item.ignoredDoc || item.ign == 'drop'
-                      ? 'مستند متجاهل - ${baseName(item.path)}'
-                      : 'ماكينة ${item.orderNum ?? '؟'} - ${item.unitName ?? 'وحدة غير معروفة'}',
+                      ? 'ظ…ط³طھظ†ط¯ ظ…طھط¬ط§ظ‡ظ„ - ${baseName(item.path)}'
+                      : 'ظ…ط§ظƒظٹظ†ط© ${item.orderNum ?? 'طں'} - ${item.unitName ?? 'ظˆط­ط¯ط© ط؛ظٹط± ظ…ط¹ط±ظˆظپط©'}',
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 subtitle: Text(subtitleOf(item)),
@@ -4466,7 +4864,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   children: [
                     if (item.userExcluded)
                       IconButton(
-                        tooltip: tr('رجّعه (احتسبه)'),
+                        tooltip: tr('ط±ط¬ظ‘ط¹ظ‡ (ط§ط­طھط³ط¨ظ‡)'),
                         icon: const Icon(Icons.undo, color: Colors.red),
                         onPressed: busy
                             ? null
@@ -4489,14 +4887,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-            ),
+            )),
         ],
       ),
     );
   }
 }
 
-// ───────────────────── متصفح الفولدرات ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ظ…طھطµظپط­ ط§ظ„ظپظˆظ„ط¯ط±ط§طھ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class FolderPicker extends StatefulWidget {
   final String start;
   const FolderPicker({super.key, required this.start});
@@ -4529,7 +4927,7 @@ class _FolderPickerState extends State<FolderPicker> {
       error = null;
     } catch (_) {
       dirs = [];
-      error = 'مش قادر أفتح الفولدر ده.';
+      error = 'ظ…ط´ ظ‚ط§ط¯ط± ط£ظپطھط­ ط§ظ„ظپظˆظ„ط¯ط± ط¯ظ‡.';
     }
   }
 
@@ -4542,7 +4940,7 @@ class _FolderPickerState extends State<FolderPicker> {
   Widget build(BuildContext context) {
     final canUp = path.length > root.length;
     return Scaffold(
-      appBar: AppBar(title: const Text('اختيار فولدر')),
+      appBar: AppBar(title: const Text('ط§ط®طھظٹط§ط± ظپظˆظ„ط¯ط±')),
       body: SafeArea(
         child: Column(
           children: [
@@ -4577,7 +4975,7 @@ class _FolderPickerState extends State<FolderPicker> {
               padding: const EdgeInsets.all(12),
               child: FilledButton(
                 onPressed: () => Navigator.pop(context, path),
-                child: const Text('اختيار هذا الفولدر'),
+                child: const Text('ط§ط®طھظٹط§ط± ظ‡ط°ط§ ط§ظ„ظپظˆظ„ط¯ط±'),
               ),
             ),
           ],
@@ -4588,8 +4986,8 @@ class _FolderPickerState extends State<FolderPicker> {
 }
 
 
-// ───────────────────── شاشة المراجعة ─────────────────────
-// ───────── صورة بتتكبّر (قرصة بصباعين + دبل تاب) علشان تشوف تفاصيل الباتش ─────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط´ط§ط´ط© ط§ظ„ظ…ط±ط§ط¬ط¹ط© â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€ طµظˆط±ط© ط¨طھطھظƒط¨ظ‘ط± (ظ‚ط±طµط© ط¨طµط¨ط§ط¹ظٹظ† + ط¯ط¨ظ„ طھط§ط¨) ط¹ظ„ط´ط§ظ† طھط´ظˆظپ طھظپط§طµظٹظ„ ط§ظ„ط¨ط§طھط´ â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class ZoomableImage extends StatefulWidget {
   final String path;
   const ZoomableImage({super.key, required this.path});
@@ -4661,8 +5059,8 @@ class ReceiptZoomPage extends StatelessWidget {
 
 class ReviewPage extends StatefulWidget {
   final List<ReceiptItem> items;
-  final List<ReceiptItem>? allItems; // كل الإيصالات (لحساب رقم الباتش الإضافي)
-  final bool single; // فتحناها من القلم لإيصال واحد
+  final List<ReceiptItem>? allItems; // ظƒظ„ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ (ظ„ط­ط³ط§ط¨ ط±ظ‚ظ… ط§ظ„ط¨ط§طھط´ ط§ظ„ط¥ط¶ط§ظپظٹ)
+  final bool single; // ظپطھط­ظ†ط§ظ‡ط§ ظ…ظ† ط§ظ„ظ‚ظ„ظ… ظ„ط¥ظٹطµط§ظ„ ظˆط§ط­ط¯
   const ReviewPage({super.key, required this.items, this.allItems, this.single = false});
 
   @override
@@ -4672,7 +5070,7 @@ class ReviewPage extends StatefulWidget {
 class _ReviewPageState extends State<ReviewPage> {
   int idx = 0;
   bool changed = false;
-  int rev = 0; // بيتغير لما الصورة تتدوّر علشان تتحدّث
+  int rev = 0; // ط¨ظٹطھط؛ظٹط± ظ„ظ…ط§ ط§ظ„طµظˆط±ط© طھطھط¯ظˆظ‘ط± ط¹ظ„ط´ط§ظ† طھطھط­ط¯ظ‘ط«
   final done = <ReceiptItem>{};
   late TextEditingController amt;
   int? order;
@@ -4709,7 +5107,7 @@ class _ReviewPageState extends State<ReviewPage> {
     final v = double.tryParse(amt.text.replaceAll(',', '.'));
     if (v == null || v <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('اكتب مبلغ صحيح.')),
+        const SnackBar(content: Text('ط§ظƒطھط¨ ظ…ط¨ظ„ط؛ طµط­ظٹط­.')),
       );
       return;
     }
@@ -4739,7 +5137,7 @@ class _ReviewPageState extends State<ReviewPage> {
     }
   }
 
-  // صورة متجاهلة: ادخلها كباتش، أو تجاهلها نهائي
+  // طµظˆط±ط© ظ…طھط¬ط§ظ‡ظ„ط©: ط§ط¯ط®ظ„ظ‡ط§ ظƒط¨ط§طھط´طŒ ط£ظˆ طھط¬ط§ظ‡ظ„ظ‡ط§ ظ†ظ‡ط§ط¦ظٹ
   void resolveIgnored(bool keep) {
     final it = item;
     if (keep) {
@@ -4763,7 +5161,7 @@ class _ReviewPageState extends State<ReviewPage> {
     }
   }
 
-  // تاريخ مختلف: سيبه بتاريخه، أو انقله لتاريخ الأغلب
+  // طھط§ط±ظٹط® ظ…ط®طھظ„ظپ: ط³ظٹط¨ظ‡ ط¨طھط§ط±ظٹط®ظ‡طŒ ط£ظˆ ط§ظ†ظ‚ظ„ظ‡ ظ„طھط§ط±ظٹط® ط§ظ„ط£ط؛ظ„ط¨
   void resolveDate(bool toMain) {
     final it = item;
     if (toMain && it.dateMain != null) it.date = it.dateMain;
@@ -4781,7 +5179,7 @@ class _ReviewPageState extends State<ReviewPage> {
     }
   }
 
-  // قرار الإيصال المشكوك إنه مكرر: استبعده، أو احتسبه كباتش إضافي
+  // ظ‚ط±ط§ط± ط§ظ„ط¥ظٹطµط§ظ„ ط§ظ„ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط±: ط§ط³طھط¨ط¹ط¯ظ‡طŒ ط£ظˆ ط§ط­طھط³ط¨ظ‡ ظƒط¨ط§طھط´ ط¥ط¶ط§ظپظٹ
   void resolveDup(bool keep) {
     final it = item;
     final all = widget.allItems ?? widget.items;
@@ -4814,7 +5212,7 @@ class _ReviewPageState extends State<ReviewPage> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('مقدرتش أدوّر الصورة.')),
+        const SnackBar(content: Text('ظ…ظ‚ط¯ط±طھط´ ط£ط¯ظˆظ‘ط± ط§ظ„طµظˆط±ط©.')),
       );
     }
   }
@@ -4834,14 +5232,14 @@ class _ReviewPageState extends State<ReviewPage> {
             top: 4,
             left: 4,
             child: IconButton.filledTonal(
-              tooltip: tr('ملء الشاشة'),
+              tooltip: tr('ظ…ظ„ط، ط§ظ„ط´ط§ط´ط©'),
               icon: const Icon(Icons.fullscreen),
               onPressed: () => Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (_) => ReceiptZoomPage(
                     path: it.path,
-                    title: 'ماكينة ${it.orderNum ?? '؟'} - ${it.unitName ?? ''}',
+                    title: 'ظ…ط§ظƒظٹظ†ط© ${it.orderNum ?? 'طں'} - ${it.unitName ?? ''}',
                   ),
                 ),
               ),
@@ -4870,9 +5268,9 @@ class _ReviewPageState extends State<ReviewPage> {
                 children: [
                   Text(
                     it.userExcluded
-                        ? '🚫 الإيصال ده مستبعد (مكرر).'
-                        : '⚠️ مشكوك إنه مكرر: نفس الماكينة ${it.orderNum ?? ''} ونفس المبلغ. '
-                            'مش محسوب في الإجمالي لحد ما تقرر. زوّم على الباتش وقارن.',
+                        ? 'ًںڑ« ط§ظ„ط¥ظٹطµط§ظ„ ط¯ظ‡ ظ…ط³طھط¨ط¹ط¯ (ظ…ظƒط±ط±).'
+                        : 'âڑ ï¸ڈ ظ…ط´ظƒظˆظƒ ط¥ظ†ظ‡ ظ…ظƒط±ط±: ظ†ظپط³ ط§ظ„ظ…ط§ظƒظٹظ†ط© ${it.orderNum ?? ''} ظˆظ†ظپط³ ط§ظ„ظ…ط¨ظ„ط؛. '
+                            'ظ…ط´ ظ…ط­ط³ظˆط¨ ظپظٹ ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ ظ„ط­ط¯ ظ…ط§ طھظ‚ط±ط±. ط²ظˆظ‘ظ… ط¹ظ„ظ‰ ط§ظ„ط¨ط§طھط´ ظˆظ‚ط§ط±ظ†.',
                     style: TextStyle(color: _tintFg(context, Colors.orange), fontSize: 13),
                   ),
                   const SizedBox(height: 6),
@@ -4881,7 +5279,7 @@ class _ReviewPageState extends State<ReviewPage> {
                       Expanded(
                         child: FilledButton(
                           onPressed: () => resolveDup(true),
-                          child: const Text('مش مكرر - احتسبه باتش إضافي',
+                          child: const Text('ظ…ط´ ظ…ظƒط±ط± - ط§ط­طھط³ط¨ظ‡ ط¨ط§طھط´ ط¥ط¶ط§ظپظٹ',
                               textAlign: TextAlign.center, style: TextStyle(fontSize: 12)),
                         ),
                       ),
@@ -4890,7 +5288,7 @@ class _ReviewPageState extends State<ReviewPage> {
                         Expanded(
                           child: OutlinedButton(
                             onPressed: () => resolveDup(false),
-                            child: const Text('مكرر - استبعده',
+                            child: const Text('ظ…ظƒط±ط± - ط§ط³طھط¨ط¹ط¯ظ‡',
                                 textAlign: TextAlign.center, style: TextStyle(fontSize: 12)),
                           ),
                         ),
@@ -4913,8 +5311,8 @@ class _ReviewPageState extends State<ReviewPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    '📄 التطبيق اتجاهل الصورة دي لأن شكلها إيصال دفع أو مستند مش باتش. '
-                    'زوّم وشوف: لو باتش حقيقي ادخله وكمّل المبلغ والماكينة.',
+                    'ًں“„ ط§ظ„طھط·ط¨ظٹظ‚ ط§طھط¬ط§ظ‡ظ„ ط§ظ„طµظˆط±ط© ط¯ظٹ ظ„ط£ظ† ط´ظƒظ„ظ‡ط§ ط¥ظٹطµط§ظ„ ط¯ظپط¹ ط£ظˆ ظ…ط³طھظ†ط¯ ظ…ط´ ط¨ط§طھط´. '
+                    'ط²ظˆظ‘ظ… ظˆط´ظˆظپ: ظ„ظˆ ط¨ط§طھط´ ط­ظ‚ظٹظ‚ظٹ ط§ط¯ط®ظ„ظ‡ ظˆظƒظ…ظ‘ظ„ ط§ظ„ظ…ط¨ظ„ط؛ ظˆط§ظ„ظ…ط§ظƒظٹظ†ط©.',
                     style: TextStyle(color: _tintFg(context, Colors.orange), fontSize: 13),
                   ),
                   const SizedBox(height: 6),
@@ -4923,7 +5321,7 @@ class _ReviewPageState extends State<ReviewPage> {
                       Expanded(
                         child: FilledButton(
                           onPressed: () => resolveIgnored(true),
-                          child: const Text('ده باتش - ادخله',
+                          child: const Text('ط¯ظ‡ ط¨ط§طھط´ - ط§ط¯ط®ظ„ظ‡',
                               textAlign: TextAlign.center, style: TextStyle(fontSize: 12)),
                         ),
                       ),
@@ -4931,7 +5329,7 @@ class _ReviewPageState extends State<ReviewPage> {
                       Expanded(
                         child: OutlinedButton(
                           onPressed: () => resolveIgnored(false),
-                          child: const Text('مش باتش - تجاهله',
+                          child: const Text('ظ…ط´ ط¨ط§طھط´ - طھط¬ط§ظ‡ظ„ظ‡',
                               textAlign: TextAlign.center, style: TextStyle(fontSize: 12)),
                         ),
                       ),
@@ -4953,7 +5351,7 @@ class _ReviewPageState extends State<ReviewPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    '📅 تاريخ الإيصال ${it.date} بينما أغلب الإيصالات ${it.dateMain}.',
+                    'ًں“… طھط§ط±ظٹط® ط§ظ„ط¥ظٹطµط§ظ„ ${it.date} ط¨ظٹظ†ظ…ط§ ط£ط؛ظ„ط¨ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ ${it.dateMain}.',
                     style: TextStyle(color: _tintFg(context, Colors.orange), fontSize: 13),
                   ),
                   const SizedBox(height: 6),
@@ -4962,7 +5360,7 @@ class _ReviewPageState extends State<ReviewPage> {
                       Expanded(
                         child: FilledButton(
                           onPressed: () => resolveDate(true),
-                          child: Text('خليه بتاريخ ${it.dateMain}',
+                          child: Text('ط®ظ„ظٹظ‡ ط¨طھط§ط±ظٹط® ${it.dateMain}',
                               textAlign: TextAlign.center, style: const TextStyle(fontSize: 12)),
                         ),
                       ),
@@ -4970,7 +5368,7 @@ class _ReviewPageState extends State<ReviewPage> {
                       Expanded(
                         child: OutlinedButton(
                           onPressed: () => resolveDate(false),
-                          child: const Text('التاريخ صح - سيبه',
+                          child: const Text('ط§ظ„طھط§ط±ظٹط® طµط­ - ط³ظٹط¨ظ‡',
                               textAlign: TextAlign.center, style: TextStyle(fontSize: 12)),
                         ),
                       ),
@@ -4984,19 +5382,19 @@ class _ReviewPageState extends State<ReviewPage> {
               padding: const EdgeInsets.only(bottom: 8),
               child: Text(
                 it.how == 'auto-number' || it.how == 'conflict'
-                    ? '❓ رقم الماكينة اتحدد تلقائياً (${it.orderNum}) - اتأكد منه واضغط حفظ.'
-                    : '❓ الوحدة اتحددت بالاسم/الميرشانت فقط - اتأكد من الماكينة واضغط حفظ.',
+                    ? 'â‌“ ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط© ط§طھط­ط¯ط¯ طھظ„ظ‚ط§ط¦ظٹط§ظ‹ (${it.orderNum}) - ط§طھط£ظƒط¯ ظ…ظ†ظ‡ ظˆط§ط¶ط؛ط· ط­ظپط¸.'
+                    : 'â‌“ ط§ظ„ظˆط­ط¯ط© ط§طھط­ط¯ط¯طھ ط¨ط§ظ„ط§ط³ظ…/ط§ظ„ظ…ظٹط±ط´ط§ظ†طھ ظپظ‚ط· - ط§طھط£ظƒط¯ ظ…ظ† ط§ظ„ظ…ط§ظƒظٹظ†ط© ظˆط§ط¶ط؛ط· ط­ظپط¸.',
                 style: TextStyle(color: _tintFg(context, Colors.orange), fontSize: 13),
               ),
             ),
           if (it.unusual != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: Text('⚠️ ${it.unusual}  (لو المبلغ صح اضغط حفظ)',
+              child: Text('âڑ ï¸ڈ ${it.unusual}  (ظ„ظˆ ط§ظ„ظ…ط¨ظ„ط؛ طµط­ ط§ط¶ط؛ط· ط­ظپط¸)',
                   style: TextStyle(color: _tintFg(context, Colors.orange), fontSize: 13)),
             ),
           Text(
-            'المقروء: ${it.amount > 0 ? it.amount.toStringAsFixed(2) : 'غير مقروء'} ج.م'
+            'ط§ظ„ظ…ظ‚ط±ظˆط،: ${it.amount > 0 ? it.amount.toStringAsFixed(2) : 'ط؛ظٹط± ظ…ظ‚ط±ظˆط،'} ط¬.ظ…'
             '${it.batches.length > 1 ? '  (= ${it.batches.map((b) => b.toStringAsFixed(2)).join(' + ')})' : ''}',
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
@@ -5006,12 +5404,12 @@ class _ReviewPageState extends State<ReviewPage> {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text('⚠️ القراءة التانية: ${it.alt!.toStringAsFixed(2)}',
+                    child: Text('âڑ ï¸ڈ ط§ظ„ظ‚ط±ط§ط،ط© ط§ظ„طھط§ظ†ظٹط©: ${it.alt!.toStringAsFixed(2)}',
                         style: TextStyle(color: _tintFg(context, Colors.orange))),
                   ),
                   TextButton(
                     onPressed: () => setState(() => amt.text = it.alt!.toStringAsFixed(2)),
-                    child: const Text('استخدمها'),
+                    child: const Text('ط§ط³طھط®ط¯ظ…ظ‡ط§'),
                   ),
                 ],
               ),
@@ -5021,7 +5419,7 @@ class _ReviewPageState extends State<ReviewPage> {
             controller: amt,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-              labelText: tr('المبلغ الإجمالي'),
+              labelText: tr('ط§ظ„ظ…ط¨ظ„ط؛ ط§ظ„ط¥ط¬ظ…ط§ظ„ظٹ'),
               border: const OutlineInputBorder(),
             ),
           ),
@@ -5029,7 +5427,7 @@ class _ReviewPageState extends State<ReviewPage> {
           DropdownButtonFormField<int>(
             value: order,
             isExpanded: true,
-            hint: const Text('اختر الماكينة'),
+            hint: const Text('ط§ط®طھط± ط§ظ„ظ…ط§ظƒظٹظ†ط©'),
             items: [
               for (final i in machineNums())
                 DropdownMenuItem(
@@ -5045,13 +5443,13 @@ class _ReviewPageState extends State<ReviewPage> {
               OutlinedButton.icon(
                 onPressed: rotate,
                 icon: const Icon(Icons.rotate_right),
-                label: const Text('تدوير'),
+                label: const Text('طھط¯ظˆظٹط±'),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: FilledButton(
                   onPressed: () => save(),
-                  child: Text(idx < widget.items.length - 1 ? 'حفظ والتالي' : 'حفظ'),
+                  child: Text(idx < widget.items.length - 1 ? 'ط­ظپط¸ ظˆط§ظ„طھط§ظ„ظٹ' : 'ط­ظپط¸'),
                 ),
               ),
             ],
@@ -5067,8 +5465,8 @@ class _ReviewPageState extends State<ReviewPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text('مراجعة ${idx + 1} / ${widget.items.length}'
-              '${done.contains(it) ? '  ✓' : ''}'),
+          title: Text('ظ…ط±ط§ط¬ط¹ط© ${idx + 1} / ${widget.items.length}'
+              '${done.contains(it) ? '  âœ“' : ''}'),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: () => Navigator.pop(context, changed),
@@ -5076,12 +5474,12 @@ class _ReviewPageState extends State<ReviewPage> {
           actions: [
             IconButton(
               icon: const Icon(Icons.navigate_before),
-              tooltip: tr('السابق'),
+              tooltip: tr('ط§ظ„ط³ط§ط¨ظ‚'),
               onPressed: idx > 0 ? () => go(idx - 1) : null,
             ),
             IconButton(
               icon: const Icon(Icons.navigate_next),
-              tooltip: tr('التالي'),
+              tooltip: tr('ط§ظ„طھط§ظ„ظٹ'),
               onPressed: idx < widget.items.length - 1 ? () => go(idx + 1) : null,
             ),
           ],
@@ -5112,10 +5510,10 @@ class _ReviewPageState extends State<ReviewPage> {
 }
 
 
-// ───────────────────── ملفات الماكينات (PDF لكل ماكينة) ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ظ…ظ„ظپط§طھ ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ (PDF ظ„ظƒظ„ ظ…ط§ظƒظٹظ†ط©) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 String? loadPdfDir() => _readCfg()['pdfDir'] as String?;
 
-// فولدرات مستندات واتساب (جنب فولدرات الصور)
+// ظپظˆظ„ط¯ط±ط§طھ ظ…ط³طھظ†ط¯ط§طھ ظˆط§طھط³ط§ط¨ (ط¬ظ†ط¨ ظپظˆظ„ط¯ط±ط§طھ ط§ظ„طµظˆط±)
 List<Directory> findWhatsAppDocDirs() {
   final out = <Directory>[];
   for (final d in findWhatsAppImageDirs()) {
@@ -5149,7 +5547,7 @@ void savePdfDir(String? f) {
   _writeCfg(m);
 }
 
-// الاسم الجديد: "1.اسم.الوحدة.1.يوم.4.11" (وحدة فيها أكتر من ماكينة) أو "17.اسم.الوحدة.يوم.4.11"
+// ط§ظ„ط§ط³ظ… ط§ظ„ط¬ط¯ظٹط¯: "1.ط§ط³ظ….ط§ظ„ظˆط­ط¯ط©.1.ظٹظˆظ….4.11" (ظˆط­ط¯ط© ظپظٹظ‡ط§ ط£ظƒطھط± ظ…ظ† ظ…ط§ظƒظٹظ†ط©) ط£ظˆ "17.ط§ط³ظ….ط§ظ„ظˆط­ط¯ط©.ظٹظˆظ….4.11"
 String machineNewName(TerminalInfo info, String day, String month) {
   final same = terminals.values.where((t) => t.excelRow == info.excelRow).toList()
     ..sort((a, b) => a.orderNum.compareTo(b.orderNum));
@@ -5159,15 +5557,15 @@ String machineNewName(TerminalInfo info, String day, String month) {
     info.orderNum.toString(),
     unit,
     if (same.length > 1) '$k',
-    'يوم',
+    'ظٹظˆظ…',
     day,
     month,
   ].join('.');
 }
 
-// ───────── عدّ إيصالات الدفع: كل إيصال دفع ليه سطر RRN (12 رقم، بيبدأ بـ 63) ─────────
-// بنقرا الصفحة على شرائح رأسية ضيقة (القراءة أدق من الصفحة كلها)، وبنجمع "نقاط ارتكاز"
-// (سطر RRN) لكل إيصال. إيصالات الإقفال والملخص ما فيهاش RRN فمبتتعدّش.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط¹ط¯ظ‘ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹: ظƒظ„ ط¥ظٹطµط§ظ„ ط¯ظپط¹ ظ„ظٹظ‡ ط³ط·ط± RRN (12 ط±ظ‚ظ…طŒ ط¨ظٹط¨ط¯ط£ ط¨ظ€ 63) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ط¨ظ†ظ‚ط±ط§ ط§ظ„طµظپط­ط© ط¹ظ„ظ‰ ط´ط±ط§ط¦ط­ ط±ط£ط³ظٹط© ط¶ظٹظ‚ط© (ط§ظ„ظ‚ط±ط§ط،ط© ط£ط¯ظ‚ ظ…ظ† ط§ظ„طµظپط­ط© ظƒظ„ظ‡ط§)طŒ ظˆط¨ظ†ط¬ظ…ط¹ "ظ†ظ‚ط§ط· ط§ط±طھظƒط§ط²"
+// (ط³ط·ط± RRN) ظ„ظƒظ„ ط¥ظٹطµط§ظ„. ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¥ظ‚ظپط§ظ„ ظˆط§ظ„ظ…ظ„ط®طµ ظ…ط§ ظپظٹظ‡ط§ط´ RRN ظپظ…ط¨طھطھط¹ط¯ظ‘ط´.
 final RegExp _dateRe = RegExp(r'(20\d{2})[^\d\n]{1,3}(\d{2})[^\d\n]{1,3}(\d{2})');
 
 String? _dayKey(String text) {
@@ -5178,7 +5576,7 @@ String? _dayKey(String text) {
   return null;
 }
 
-// null = مفيش RRN في السطر | 12 رقم = RRN كامل | 'P' = RRN مقروء ناقص
+// null = ظ…ظپظٹط´ RRN ظپظٹ ط§ظ„ط³ط·ط± | 12 ط±ظ‚ظ… = RRN ظƒط§ظ…ظ„ | 'P' = RRN ظ…ظ‚ط±ظˆط، ظ†ط§ظ‚طµ
 String? _anchorOf(String t) {
   final m = RegExp(r'R{1,2}N\W{0,3}((?:\d\s?){9,12})', caseSensitive: false).firstMatch(t) ??
       RegExp(r'(?<!\d)(63(?:\d\s?){7,10})(?!\d)').firstMatch(t);
@@ -5191,7 +5589,7 @@ String? _anchorOf(String t) {
 
 const double _stripScale = 1.5;
 
-// بيقص الصفحة لـ 5 شرائح رأسية (أعمدة) متداخلة ويكبّرها. بيرجّع [عرض، ارتفاع، x0 لكل شريحة...]
+// ط¨ظٹظ‚طµ ط§ظ„طµظپط­ط© ظ„ظ€ 5 ط´ط±ط§ط¦ط­ ط±ط£ط³ظٹط© (ط£ط¹ظ…ط¯ط©) ظ…طھط¯ط§ط®ظ„ط© ظˆظٹظƒط¨ظ‘ط±ظ‡ط§. ط¨ظٹط±ط¬ظ‘ط¹ [ط¹ط±ط¶طŒ ط§ط±طھظپط§ط¹طŒ x0 ظ„ظƒظ„ ط´ط±ظٹط­ط©...]
 List<int> _makeStrips(String src, String prefix) {
   final im = img.decodeImage(File(src).readAsBytesSync());
   if (im == null) return [];
@@ -5226,7 +5624,7 @@ class MCollector {
   void add(Anchor n) {
     final list = pages.last;
     for (final a in list) {
-      // نفس الإيصال اتقرا من شريحتين متداخلتين: نفس المكان على الصفحة
+      // ظ†ظپط³ ط§ظ„ط¥ظٹطµط§ظ„ ط§طھظ‚ط±ط§ ظ…ظ† ط´ط±ظٹط­طھظٹظ† ظ…طھط¯ط§ط®ظ„طھظٹظ†: ظ†ظپط³ ط§ظ„ظ…ظƒط§ظ† ط¹ظ„ظ‰ ط§ظ„طµظپط­ط©
       if (a.l < n.r && n.l < a.r && (a.cy - n.cy).abs() < pageH * 0.012) {
         a.rrn ??= n.rrn;
         a.day ??= n.day;
@@ -5262,7 +5660,7 @@ class MCollector {
             caseSensitive: false)
         .hasMatch(all);
 
-    // الماكينة: أكتر Terminal ID متكرر
+    // ط§ظ„ظ…ط§ظƒظٹظ†ط©: ط£ظƒطھط± Terminal ID ظ…طھظƒط±ط±
     final tc = <String, int>{};
     for (final m in RegExp(r'(?<!\d)(\d{8})(?!\d)').allMatches(all)) {
       var c = m.group(1)!;
@@ -5273,7 +5671,7 @@ class MCollector {
         ? tc.entries.reduce((a, b) => a.value >= b.value ? a : b).key
         : (findTerminalIn([all]) ?? discoverTerminal([all]));
 
-    // اليوم الأغلب + الإيصالات اللي مش تبع نفس اليوم
+    // ط§ظ„ظٹظˆظ… ط§ظ„ط£ط؛ظ„ط¨ + ط§ظ„ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ظ„ظٹ ظ…ط´ طھط¨ط¹ ظ†ظپط³ ط§ظ„ظٹظˆظ…
     if (days.isEmpty) {
       for (final m in _dateRe.allMatches(all)) {
         final k = _dayKey(m.group(0)!);
@@ -5286,14 +5684,14 @@ class MCollector {
       r.day = p[0];
       r.month = p[1];
       r.rrnDay.forEach((rrn, d) {
-        if (d != null && d != best) r.otherDay.add('إيصال ${rrn.substring(6)} بتاريخ $d');
+        if (d != null && d != best) r.otherDay.add('ط¥ظٹطµط§ظ„ ${rrn.substring(6)} ط¨طھط§ط±ظٹط® $d');
       });
       for (final d in partialDays) {
-        if (d != best) r.otherDay.add('إيصال (رقمه مش واضح) بتاريخ $d');
+        if (d != best) r.otherDay.add('ط¥ظٹطµط§ظ„ (ط±ظ‚ظ…ظ‡ ظ…ط´ ظˆط§ط¶ط­) ط¨طھط§ط±ظٹط® $d');
       }
     }
 
-    // تسلسل أرقام الإيصالات (آخر 6 أرقام من الـ RRN): أكبر مجموعة متتالية
+    // طھط³ظ„ط³ظ„ ط£ط±ظ‚ط§ظ… ط§ظ„ط¥ظٹطµط§ظ„ط§طھ (ط¢ط®ط± 6 ط£ط±ظ‚ط§ظ… ظ…ظ† ط§ظ„ظ€ RRN): ط£ظƒط¨ط± ظ…ط¬ظ…ظˆط¹ط© ظ…طھطھط§ظ„ظٹط©
     final nums = r.rrnDay.keys.map((k) => int.parse(k.substring(6))).toList()..sort();
     if (nums.length >= 2) {
       var bestStart = 0, bestLen = 1, start = 0;
@@ -5331,12 +5729,12 @@ class MScan {
   int? get rangeLen => seqMin == null ? null : seqMax! - seqMin! + 1;
   bool get agree => rangeLen == null || count == rangeLen;
   String get rangeText =>
-      seqMin == null ? '' : ' • التسلسل ${seqMin.toString().padLeft(6, '0')}-${seqMax.toString().padLeft(6, '0')} ($rangeLen)';
+      seqMin == null ? '' : ' â€¢ ط§ظ„طھط³ظ„ط³ظ„ ${seqMin.toString().padLeft(6, '0')}-${seqMax.toString().padLeft(6, '0')} ($rangeLen)';
   String get seqNote {
-    final miss = seqMissing.take(10).map((n) => n.toString().padLeft(6, '0')).join('، ');
-    return 'العدد $count بس التسلسل $rangeLen'
-        '${seqMissing.isNotEmpty ? ' - أرقام مش لاقيها: $miss${seqMissing.length > 10 ? ' ...' : ''}' : ''}'
-        ' (ممكن إيصالات ناقصة أو مش اتقرت، راجع الملف)';
+    final miss = seqMissing.take(10).map((n) => n.toString().padLeft(6, '0')).join('طŒ ');
+    return 'ط§ظ„ط¹ط¯ط¯ $count ط¨ط³ ط§ظ„طھط³ظ„ط³ظ„ $rangeLen'
+        '${seqMissing.isNotEmpty ? ' - ط£ط±ظ‚ط§ظ… ظ…ط´ ظ„ط§ظ‚ظٹظ‡ط§: $miss${seqMissing.length > 10 ? ' ...' : ''}' : ''}'
+        ' (ظ…ظ…ظƒظ† ط¥ظٹطµط§ظ„ط§طھ ظ†ط§ظ‚طµط© ط£ظˆ ظ…ط´ ط§طھظ‚ط±طھطŒ ط±ط§ط¬ط¹ ط§ظ„ظ…ظ„ظپ)';
   }
 }
 
@@ -5367,13 +5765,13 @@ void _collect(RecognizedText res, double x0, double scale, MCollector col) {
   }
 }
 
-// قراءة الصفحة كلها + قراءة شرائح مكبّرة، وبعدين دمج النتايج (نفس الإيصال بيتعدّ مرة)
-int _tmStrips = 0, _tmOcr = 0; // تشخيص: مجموع الوقت (ms) لعمل الشرائح وللـ OCR
+// ظ‚ط±ط§ط،ط© ط§ظ„طµظپط­ط© ظƒظ„ظ‡ط§ + ظ‚ط±ط§ط،ط© ط´ط±ط§ط¦ط­ ظ…ظƒط¨ظ‘ط±ط©طŒ ظˆط¨ط¹ط¯ظٹظ† ط¯ظ…ط¬ ط§ظ„ظ†طھط§ظٹط¬ (ظ†ظپط³ ط§ظ„ط¥ظٹطµط§ظ„ ط¨ظٹطھط¹ط¯ظ‘ ظ…ط±ط©)
+int _tmStrips = 0, _tmOcr = 0; // طھط´ط®ظٹطµ: ظ…ط¬ظ…ظˆط¹ ط§ظ„ظˆظ‚طھ (ms) ظ„ط¹ظ…ظ„ ط§ظ„ط´ط±ط§ط¦ط­ ظˆظ„ظ„ظ€ OCR
 
 Future<void> ocrPageStrips(
     TextRecognizer rec, String pngPath, String prefix, MCollector col) async {
   final sw = Stopwatch()..start();
-  // تقطيع الشرائح (Dart صرف وبطيء) بيشتغل في isolate بالتوازي مع OCR الصفحة الكاملة
+  // طھظ‚ط·ظٹط¹ ط§ظ„ط´ط±ط§ط¦ط­ (Dart طµط±ظپ ظˆط¨ط·ظٹط،) ط¨ظٹط´طھط؛ظ„ ظپظٹ isolate ط¨ط§ظ„طھظˆط§ط²ظٹ ظ…ط¹ OCR ط§ظ„طµظپط­ط© ط§ظ„ظƒط§ظ…ظ„ط©
   final stripsF = Isolate.run(() => _makeStrips(pngPath, prefix))
       .then<List<int>>((v) => v, onError: (_) => <int>[]);
   RecognizedText? whole;
@@ -5400,9 +5798,9 @@ Future<void> ocrPageStrips(
   _tmOcr += tWhole + (sw.elapsedMilliseconds - t1);
 }
 
-// ───────── حالة فحص إيصالات الدفع: بتتحفظ بعد كل ملف علشان لو التطبيق اتقفل يكمّل من مكانه ─────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€ ط­ط§ظ„ط© ظپط­طµ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹: ط¨طھطھط­ظپط¸ ط¨ط¹ط¯ ظƒظ„ ظ…ظ„ظپ ط¹ظ„ط´ط§ظ† ظ„ظˆ ط§ظ„طھط·ط¨ظٹظ‚ ط§طھظ‚ظپظ„ ظٹظƒظ…ظ‘ظ„ ظ…ظ† ظ…ظƒط§ظ†ظ‡ â”€â”€â”€â”€â”€â”€â”€â”€â”€
 final String mStatePath = '$baseDir/.app_machines.json';
-final String defaultMDest = '$baseDir/وحدات';
+final String defaultMDest = '$baseDir/ظˆط­ط¯ط§طھ';
 
 String loadMOut() => (_readCfg()['mOut'] as String?) ?? defaultMDest;
 
@@ -5419,17 +5817,17 @@ class MResult {
   String? openPath;
   int? orderNum;
   String? newName;
-  int count = -1; // -1 = لسه ما اتعدّش
+  int count = -1; // -1 = ظ„ط³ظ‡ ظ…ط§ ط§طھط¹ط¯ظ‘ط´
   int tries = 0;
   String detail = '';
   final List<String> idNotes = [];
   final List<String> cntNotes = [];
-  List<String> altTids = []; // مرشحين تانيين للماكينة (مش بيتحفظوا)
+  List<String> altTids = []; // ظ…ط±ط´ط­ظٹظ† طھط§ظ†ظٹظٹظ† ظ„ظ„ظ…ط§ظƒظٹظ†ط© (ظ…ط´ ط¨ظٹطھط­ظپط¸ظˆط§)
   Map<String, double> votes = {};
   String? tidUsed, dayUsed, monthUsed;
   bool idOk = true;
   bool cntOk = true;
-  int verdict = 0; // 0 = لسه ما اتراجعش، 1 = صح (يفضل مع ملفات اليوم)، -1 = غلط (مستبعد)
+  int verdict = 0; // 0 = ظ„ط³ظ‡ ظ…ط§ ط§طھط±ط§ط¬ط¹ط´طŒ 1 = طµط­ (ظٹظپط¶ظ„ ظ…ط¹ ظ…ظ„ظپط§طھ ط§ظ„ظٹظˆظ…)طŒ -1 = ط؛ظ„ط· (ظ…ط³طھط¨ط¹ط¯)
   final TextEditingController ctl = TextEditingController();
   MResult(this.pdfName);
 
@@ -5502,7 +5900,7 @@ void saveMState(List<MResult> rs) {
   } catch (_) {}
 }
 
-// تعريف سريع: الماكينة (Terminal ID) + اليوم من نص صفحة أو أكتر
+// طھط¹ط±ظٹظپ ط³ط±ظٹط¹: ط§ظ„ظ…ط§ظƒظٹظ†ط© (Terminal ID) + ط§ظ„ظٹظˆظ… ظ…ظ† ظ†طµ طµظپط­ط© ط£ظˆ ط£ظƒطھط±
 class MIdent {
   String? tid, day, month;
 }
@@ -5532,8 +5930,8 @@ MIdent _identify(String all) {
   return r;
 }
 
-// ───────── تعريف الماكينة من جوه الـ PDF بس (تصويت بين الصفحات) — مفيش اعتماد على اسم الملف ─────────
-// أصوات صفحة واحدة: "TERMINAL ID" بوزن 3، أي رقم 8 خانات معروف بوزن 1، وتقريبي (غلطة رقم) بوزن 0.5
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€ طھط¹ط±ظٹظپ ط§ظ„ظ…ط§ظƒظٹظ†ط© ظ…ظ† ط¬ظˆظ‡ ط§ظ„ظ€ PDF ط¨ط³ (طھطµظˆظٹطھ ط¨ظٹظ† ط§ظ„طµظپط­ط§طھ) â€” ظ…ظپظٹط´ ط§ط¹طھظ…ط§ط¯ ط¹ظ„ظ‰ ط§ط³ظ… ط§ظ„ظ…ظ„ظپ â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ط£طµظˆط§طھ طµظپط­ط© ظˆط§ط­ط¯ط©: "TERMINAL ID" ط¨ظˆط²ظ† 3طŒ ط£ظٹ ط±ظ‚ظ… 8 ط®ط§ظ†ط§طھ ظ…ط¹ط±ظˆظپ ط¨ظˆط²ظ† 1طŒ ظˆطھظ‚ط±ظٹط¨ظٹ (ط؛ظ„ط·ط© ط±ظ‚ظ…) ط¨ظˆط²ظ† 0.5
 Map<String, double> _tidVotes(String text) {
   final v = <String, double>{};
   final lab = _tidLabeled(text);
@@ -5560,12 +5958,12 @@ int _cmpM(MResult a, MResult b) {
   return c != 0 ? c : (a.newName ?? a.pdfName).compareTo(b.newName ?? b.pdfName);
 }
 
-// ───────────────────── تقرير إيصالات الدفع ─────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ طھظ‚ط±ظٹط± ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 String _l(BuildContext c, String ar, String en) => AppSettings.of(c).isAr ? ar : en;
 
 class _NoteKind {
   final String key;
-  final int sev; // 2 = لازم تراجع، 1 = انتبه، 0 = معلومة
+  final int sev; // 2 = ظ„ط§ط²ظ… طھط±ط§ط¬ط¹طŒ 1 = ط§ظ†طھط¨ظ‡طŒ 0 = ظ…ط¹ظ„ظˆظ…ط©
   final IconData icon;
   final String titleAr, titleEn, whyAr, whyEn, fixAr, fixEn;
   const _NoteKind(this.key, this.sev, this.icon, this.titleAr, this.titleEn, this.whyAr, this.whyEn,
@@ -5577,136 +5975,136 @@ const List<_NoteKind> _kNoteKinds = [
       'seq',
       2,
       Icons.format_list_numbered,
-      'العدد مش مطابق لتسلسل الإيصالات',
+      'ط§ظ„ط¹ط¯ط¯ ظ…ط´ ظ…ط·ط§ط¨ظ‚ ظ„طھط³ظ„ط³ظ„ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ',
       'Count does not match the receipt sequence',
-      'أرقام الإيصالات (RRN) متتالية، فالعدد المتوقع هو من أول رقم لآخر رقم. العدد اللي اتعدّ مختلف عنه، يعني غالباً فيه إيصال ناقص في الملف أو التطبيق ما قراش إيصال.',
+      'ط£ط±ظ‚ط§ظ… ط§ظ„ط¥ظٹطµط§ظ„ط§طھ (RRN) ظ…طھطھط§ظ„ظٹط©طŒ ظپط§ظ„ط¹ط¯ط¯ ط§ظ„ظ…طھظˆظ‚ط¹ ظ‡ظˆ ظ…ظ† ط£ظˆظ„ ط±ظ‚ظ… ظ„ط¢ط®ط± ط±ظ‚ظ…. ط§ظ„ط¹ط¯ط¯ ط§ظ„ظ„ظٹ ط§طھط¹ط¯ظ‘ ظ…ط®طھظ„ظپ ط¹ظ†ظ‡طŒ ظٹط¹ظ†ظٹ ط؛ط§ظ„ط¨ط§ظ‹ ظپظٹظ‡ ط¥ظٹطµط§ظ„ ظ†ط§ظ‚طµ ظپظٹ ط§ظ„ظ…ظ„ظپ ط£ظˆ ط§ظ„طھط·ط¨ظٹظ‚ ظ…ط§ ظ‚ط±ط§ط´ ط¥ظٹطµط§ظ„.',
       'Receipt numbers (RRN) are consecutive, so the expected count is first-to-last number. The counted number differs, so a receipt is probably missing from the file or was not read.',
-      'افتح الملف وراجع الأرقام اللي مش لاقيها (مكتوبة تحت)، وسجّل العدد الصح في خانة "الصح" لو اتأكدت.',
+      'ط§ظپطھط­ ط§ظ„ظ…ظ„ظپ ظˆط±ط§ط¬ط¹ ط§ظ„ط£ط±ظ‚ط§ظ… ط§ظ„ظ„ظٹ ظ…ط´ ظ„ط§ظ‚ظٹظ‡ط§ (ظ…ظƒطھظˆط¨ط© طھط­طھ)طŒ ظˆط³ط¬ظ‘ظ„ ط§ظ„ط¹ط¯ط¯ ط§ظ„طµط­ ظپظٹ ط®ط§ظ†ط© "ط§ظ„طµط­" ظ„ظˆ ط§طھط£ظƒط¯طھ.',
       'Open the file and check the missing numbers listed below, then enter the right count in the "Correct" field if you are sure.'),
   _NoteKind(
       'otherday',
       2,
       Icons.event_busy,
-      'فيه إيصالات من يوم تاني',
+      'ظپظٹظ‡ ط¥ظٹطµط§ظ„ط§طھ ظ…ظ† ظٹظˆظ… طھط§ظ†ظٹ',
       'Receipts from another day',
-      'تاريخ بعض الإيصالات مختلف عن يوم باقي الملف، فممكن تكون اتضافت بالغلط أو الملف فيه أكتر من يوم.',
+      'طھط§ط±ظٹط® ط¨ط¹ط¶ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ ظ…ط®طھظ„ظپ ط¹ظ† ظٹظˆظ… ط¨ط§ظ‚ظٹ ط§ظ„ظ…ظ„ظپطŒ ظپظ…ظ…ظƒظ† طھظƒظˆظ† ط§طھط¶ط§ظپطھ ط¨ط§ظ„ط؛ظ„ط· ط£ظˆ ط§ظ„ظ…ظ„ظپ ظپظٹظ‡ ط£ظƒطھط± ظ…ظ† ظٹظˆظ….',
       'Some receipts have a different date from the rest of the file; they may have been added by mistake or the file spans more than one day.',
-      'راجع التواريخ المذكورة، ولو الملف مش بتاع اليوم علّمه غلط ✗.',
-      'Check the dates listed; if the file is not for this day, mark it wrong ✗.'),
+      'ط±ط§ط¬ط¹ ط§ظ„طھظˆط§ط±ظٹط® ط§ظ„ظ…ط°ظƒظˆط±ط©طŒ ظˆظ„ظˆ ط§ظ„ظ…ظ„ظپ ظ…ط´ ط¨طھط§ط¹ ط§ظ„ظٹظˆظ… ط¹ظ„ظ‘ظ…ظ‡ ط؛ظ„ط· âœ—.',
+      'Check the dates listed; if the file is not for this day, mark it wrong âœ—.'),
   _NoteKind(
       'machconf',
       2,
       Icons.compare_arrows,
-      'تعارض في رقم الماكينة',
+      'طھط¹ط§ط±ط¶ ظپظٹ ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط©',
       'Machine mismatch',
-      'اسم الملف اتحدد لماكينة، لكن الإيصالات جواه بتقول إنها ماكينة تانية.',
+      'ط§ط³ظ… ط§ظ„ظ…ظ„ظپ ط§طھط­ط¯ط¯ ظ„ظ…ط§ظƒظٹظ†ط©طŒ ظ„ظƒظ† ط§ظ„ط¥ظٹطµط§ظ„ط§طھ ط¬ظˆط§ظ‡ ط¨طھظ‚ظˆظ„ ط¥ظ†ظ‡ط§ ظ…ط§ظƒظٹظ†ط© طھط§ظ†ظٹط©.',
       'The file was named for one machine, but the receipts inside belong to another machine.',
-      'استخدم "تحديد الماكينة" من القايمة واختار الماكينة الصح.',
+      'ط§ط³طھط®ط¯ظ… "طھط­ط¯ظٹط¯ ط§ظ„ظ…ط§ظƒظٹظ†ط©" ظ…ظ† ط§ظ„ظ‚ط§ظٹظ…ط© ظˆط§ط®طھط§ط± ط§ظ„ظ…ط§ظƒظٹظ†ط© ط§ظ„طµط­.',
       'Use "Assign machine" from the menu and pick the right machine.'),
   _NoteKind(
       'readfail',
       2,
       Icons.error_outline,
-      'فشل في قراءة صفحات',
+      'ظپط´ظ„ ظپظٹ ظ‚ط±ط§ط،ط© طµظپط­ط§طھ',
       'Pages failed to read',
-      'التطبيق ما قدرش يقرا صفحة أو أكتر (أو اتقفل أثناء العد)، فالعدد ممكن يكون ناقص.',
+      'ط§ظ„طھط·ط¨ظٹظ‚ ظ…ط§ ظ‚ط¯ط±ط´ ظٹظ‚ط±ط§ طµظپط­ط© ط£ظˆ ط£ظƒطھط± (ط£ظˆ ط§طھظ‚ظپظ„ ط£ط«ظ†ط§ط، ط§ظ„ط¹ط¯)طŒ ظپط§ظ„ط¹ط¯ط¯ ظ…ظ…ظƒظ† ظٹظƒظˆظ† ظ†ط§ظ‚طµ.',
       'The app could not read one or more pages (or it closed during counting), so the count may be incomplete.',
-      'اضغط "إعادة العد" وبعدين "بدء العد". لو اتكرر راجع الملف بنفسك.',
+      'ط§ط¶ط؛ط· "ط¥ط¹ط§ط¯ط© ط§ظ„ط¹ط¯" ظˆط¨ط¹ط¯ظٹظ† "ط¨ط¯ط، ط§ظ„ط¹ط¯". ظ„ظˆ ط§طھظƒط±ط± ط±ط§ط¬ط¹ ط§ظ„ظ…ظ„ظپ ط¨ظ†ظپط³ظƒ.',
       'Tap "Recount" then "Start counting". If it repeats, check the file yourself.'),
   _NoteKind(
       'emptypages',
       1,
       Icons.insert_drive_file_outlined,
-      'صفحات من غير إيصالات',
+      'طµظپط­ط§طھ ظ…ظ† ط؛ظٹط± ط¥ظٹطµط§ظ„ط§طھ',
       'Pages without receipts',
-      'فيه صفحات في الملف التطبيق ما لقاش فيها أي إيصال (ممكن تكون صفحة فاضية أو صورة مش واضحة).',
+      'ظپظٹظ‡ طµظپط­ط§طھ ظپظٹ ط§ظ„ظ…ظ„ظپ ط§ظ„طھط·ط¨ظٹظ‚ ظ…ط§ ظ„ظ‚ط§ط´ ظپظٹظ‡ط§ ط£ظٹ ط¥ظٹطµط§ظ„ (ظ…ظ…ظƒظ† طھظƒظˆظ† طµظپط­ط© ظپط§ط¶ظٹط© ط£ظˆ طµظˆط±ط© ظ…ط´ ظˆط§ط¶ط­ط©).',
       'Some pages had no receipts detected (they may be blank or unclear).',
-      'افتح الصفحات المذكورة وتأكد إنها فعلاً فاضية.',
+      'ط§ظپطھط­ ط§ظ„طµظپط­ط§طھ ط§ظ„ظ…ط°ظƒظˆط±ط© ظˆطھط£ظƒط¯ ط¥ظ†ظ‡ط§ ظپط¹ظ„ط§ظ‹ ظپط§ط¶ظٹط©.',
       'Open the listed pages and make sure they are really empty.'),
   _NoteKind(
       'methoddiff',
       1,
       Icons.difference_outlined,
-      'تضارب بين طريقتين للعد',
+      'طھط¶ط§ط±ط¨ ط¨ظٹظ† ط·ط±ظٹظ‚طھظٹظ† ظ„ظ„ط¹ط¯',
       'Two counting methods disagree',
-      'التطبيق بيعد بطريقتين للتأكد، وفي صفحات معينة النتيجة اختلفت.',
+      'ط§ظ„طھط·ط¨ظٹظ‚ ط¨ظٹط¹ط¯ ط¨ط·ط±ظٹظ‚طھظٹظ† ظ„ظ„طھط£ظƒط¯طŒ ظˆظپظٹ طµظپط­ط§طھ ظ…ط¹ظٹظ†ط© ط§ظ„ظ†طھظٹط¬ط© ط§ط®طھظ„ظپطھ.',
       'The app counts with two methods to double-check, and on some pages the results differ.',
-      'راجع الصفحات المذكورة لو العدد مهم ليك.',
+      'ط±ط§ط¬ط¹ ط§ظ„طµظپط­ط§طھ ط§ظ„ظ…ط°ظƒظˆط±ط© ظ„ظˆ ط§ظ„ط¹ط¯ط¯ ظ…ظ‡ظ… ظ„ظٹظƒ.',
       'Check the listed pages if the exact count matters.'),
   _NoteKind(
       'nonpay',
       0,
       Icons.info_outline,
-      'مستند إقفال أو ملخص',
+      'ظ…ط³طھظ†ط¯ ط¥ظ‚ظپط§ظ„ ط£ظˆ ظ…ظ„ط®طµ',
       'Closing or summary document',
-      'الملف فيه إيصال إقفال أو ملخص أو إعادة طباعة. التطبيق تجاهله ومش محسوب في العدد.',
+      'ط§ظ„ظ…ظ„ظپ ظپظٹظ‡ ط¥ظٹطµط§ظ„ ط¥ظ‚ظپط§ظ„ ط£ظˆ ظ…ظ„ط®طµ ط£ظˆ ط¥ط¹ط§ط¯ط© ط·ط¨ط§ط¹ط©. ط§ظ„طھط·ط¨ظٹظ‚ طھط¬ط§ظ‡ظ„ظ‡ ظˆظ…ط´ ظ…ط­ط³ظˆط¨ ظپظٹ ط§ظ„ط¹ط¯ط¯.',
       'The file contains a closing, summary or reprint receipt. The app ignored it and it is not counted.',
-      'مفيش حاجة مطلوبة، ده طبيعي.',
+      'ظ…ظپظٹط´ ط­ط§ط¬ط© ظ…ط·ظ„ظˆط¨ط©طŒ ط¯ظ‡ ط·ط¨ظٹط¹ظٹ.',
       'Nothing to do, this is normal.'),
   _NoteKind(
       'nofile',
       2,
       Icons.folder_off_outlined,
-      'الملف الأصلي مش موجود',
+      'ط§ظ„ظ…ظ„ظپ ط§ظ„ط£طµظ„ظٹ ظ…ط´ ظ…ظˆط¬ظˆط¯',
       'Original file not found',
-      'الملف اتمسح أو اتنقل من مكانه، فالتطبيق مش قادر يعدّه.',
+      'ط§ظ„ظ…ظ„ظپ ط§طھظ…ط³ط­ ط£ظˆ ط§طھظ†ظ‚ظ„ ظ…ظ† ظ…ظƒط§ظ†ظ‡طŒ ظپط§ظ„طھط·ط¨ظٹظ‚ ظ…ط´ ظ‚ط§ط¯ط± ظٹط¹ط¯ظ‘ظ‡.',
       'The file was deleted or moved, so the app cannot count it.',
-      'رجّع الملف مكانه أو اعمل فحص من جديد.',
+      'ط±ط¬ظ‘ط¹ ط§ظ„ظ…ظ„ظپ ظ…ظƒط§ظ†ظ‡ ط£ظˆ ط§ط¹ظ…ظ„ ظپط­طµ ظ…ظ† ط¬ط¯ظٹط¯.',
       'Put the file back or scan again.'),
   _NoteKind(
       'datefail',
       1,
       Icons.calendar_month_outlined,
-      'التاريخ مش واضح',
+      'ط§ظ„طھط§ط±ظٹط® ظ…ط´ ظˆط§ط¶ط­',
       'Date not clear',
-      'التطبيق ما قدرش يقرا تاريخ اليوم من الملف.',
+      'ط§ظ„طھط·ط¨ظٹظ‚ ظ…ط§ ظ‚ط¯ط±ط´ ظٹظ‚ط±ط§ طھط§ط±ظٹط® ط§ظ„ظٹظˆظ… ظ…ظ† ط§ظ„ظ…ظ„ظپ.',
       'The app could not read the date from the file.',
-      'افتح الملف وتأكد من التاريخ بنفسك.',
+      'ط§ظپطھط­ ط§ظ„ظ…ظ„ظپ ظˆطھط£ظƒط¯ ظ…ظ† ط§ظ„طھط§ط±ظٹط® ط¨ظ†ظپط³ظƒ.',
       'Open the file and check the date yourself.'),
   _NoteKind(
       'namefail',
       2,
       Icons.drive_file_rename_outline,
-      'فشلت التسمية',
+      'ظپط´ظ„طھ ط§ظ„طھط³ظ…ظٹط©',
       'Naming failed',
-      'التطبيق ما قدرش يتعرف على الماكينة فمسمّاش الملف.',
+      'ط§ظ„طھط·ط¨ظٹظ‚ ظ…ط§ ظ‚ط¯ط±ط´ ظٹطھط¹ط±ظپ ط¹ظ„ظ‰ ط§ظ„ظ…ط§ظƒظٹظ†ط© ظپظ…ط³ظ…ظ‘ط§ط´ ط§ظ„ظ…ظ„ظپ.',
       'The app could not identify the machine so it did not rename the file.',
-      'استخدم "تحديد الماكينة" من القايمة.',
+      'ط§ط³طھط®ط¯ظ… "طھط­ط¯ظٹط¯ ط§ظ„ظ…ط§ظƒظٹظ†ط©" ظ…ظ† ط§ظ„ظ‚ط§ظٹظ…ط©.',
       'Use "Assign machine" from the menu.'),
   _NoteKind(
       'idweak',
       2,
       Icons.help_outline,
-      'الماكينة مش مؤكدة',
+      'ط§ظ„ظ…ط§ظƒظٹظ†ط© ظ…ط´ ظ…ط¤ظƒط¯ط©',
       'Machine not confirmed',
-      'رقم الماكينة (Terminal ID) ما اتقراش بوضوح، فالتطبيق خمّن الماكينة من بيانات تانية أو لقاها في أكتر من ملف.',
+      'ط±ظ‚ظ… ط§ظ„ظ…ط§ظƒظٹظ†ط© (Terminal ID) ظ…ط§ ط§طھظ‚ط±ط§ط´ ط¨ظˆط¶ظˆط­طŒ ظپط§ظ„طھط·ط¨ظٹظ‚ ط®ظ…ظ‘ظ† ط§ظ„ظ…ط§ظƒظٹظ†ط© ظ…ظ† ط¨ظٹط§ظ†ط§طھ طھط§ظ†ظٹط© ط£ظˆ ظ„ظ‚ط§ظ‡ط§ ظپظٹ ط£ظƒطھط± ظ…ظ† ظ…ظ„ظپ.',
       'The Terminal ID was not read clearly, so the app guessed the machine from other data or found it in more than one file.',
-      'اتأكد من الماكينة، ولو غلط استخدم "تحديد الماكينة".',
+      'ط§طھط£ظƒط¯ ظ…ظ† ط§ظ„ظ…ط§ظƒظٹظ†ط©طŒ ظˆظ„ظˆ ط؛ظ„ط· ط§ط³طھط®ط¯ظ… "طھط­ط¯ظٹط¯ ط§ظ„ظ…ط§ظƒظٹظ†ط©".',
       'Verify the machine; if wrong, use "Assign machine".'),
   _NoteKind(
       'other',
       1,
       Icons.report_problem_outlined,
-      'ملاحظة تانية',
+      'ظ…ظ„ط§ط­ط¸ط© طھط§ظ†ظٹط©',
       'Other note',
-      'ملاحظة من التطبيق مش متصنفة.',
+      'ظ…ظ„ط§ط­ط¸ط© ظ…ظ† ط§ظ„طھط·ط¨ظٹظ‚ ظ…ط´ ظ…طھطµظ†ظپط©.',
       'An unclassified note from the app.',
-      'اقراها وقرر لو محتاجة مراجعة.',
+      'ط§ظ‚ط±ط§ظ‡ط§ ظˆظ‚ط±ط± ظ„ظˆ ظ…ط­طھط§ط¬ط© ظ…ط±ط§ط¬ط¹ط©.',
       'Read it and decide whether it needs review.'),
 ];
 
 final List<List<Object>> _noteRules = [
-  [RegExp(r'^العدد \d+ بس التسلسل'), 'seq'],
-  [RegExp(r'مش تبع نفس اليوم'), 'otherday'],
-  [RegExp(r'العد لقى ماكينة'), 'machconf'],
-  [RegExp(r'صفحة فشلت قراءتها|فشل العد|العد وقف'), 'readfail'],
-  [RegExp(r'صفحات ما لقيتش فيها إيصالات'), 'emptypages'],
-  [RegExp(r'الطريقتين اختلفوا'), 'methoddiff'],
-  [RegExp(r'إقفال/ملخص'), 'nonpay'],
-  [RegExp(r'الملف الأصلي مش موجود'), 'nofile'],
-  [RegExp(r'مش قادر أعرف التاريخ'), 'datefail'],
-  [RegExp(r'فشل التسمية|فشل التعريف'), 'namefail'],
-  [RegExp(r'Terminal ID|مش واضح|مش قادر أعرف الماكينة|نفس ماكينة|اتعرفت كمان|الوحدة اتحددت'), 'idweak'],
+  [RegExp(r'^ط§ظ„ط¹ط¯ط¯ \d+ ط¨ط³ ط§ظ„طھط³ظ„ط³ظ„'), 'seq'],
+  [RegExp(r'ظ…ط´ طھط¨ط¹ ظ†ظپط³ ط§ظ„ظٹظˆظ…'), 'otherday'],
+  [RegExp(r'ط§ظ„ط¹ط¯ ظ„ظ‚ظ‰ ظ…ط§ظƒظٹظ†ط©'), 'machconf'],
+  [RegExp(r'طµظپط­ط© ظپط´ظ„طھ ظ‚ط±ط§ط،طھظ‡ط§|ظپط´ظ„ ط§ظ„ط¹ط¯|ط§ظ„ط¹ط¯ ظˆظ‚ظپ'), 'readfail'],
+  [RegExp(r'طµظپط­ط§طھ ظ…ط§ ظ„ظ‚ظٹطھط´ ظپظٹظ‡ط§ ط¥ظٹطµط§ظ„ط§طھ'), 'emptypages'],
+  [RegExp(r'ط§ظ„ط·ط±ظٹظ‚طھظٹظ† ط§ط®طھظ„ظپظˆط§'), 'methoddiff'],
+  [RegExp(r'ط¥ظ‚ظپط§ظ„/ظ…ظ„ط®طµ'), 'nonpay'],
+  [RegExp(r'ط§ظ„ظ…ظ„ظپ ط§ظ„ط£طµظ„ظٹ ظ…ط´ ظ…ظˆط¬ظˆط¯'), 'nofile'],
+  [RegExp(r'ظ…ط´ ظ‚ط§ط¯ط± ط£ط¹ط±ظپ ط§ظ„طھط§ط±ظٹط®'), 'datefail'],
+  [RegExp(r'ظپط´ظ„ ط§ظ„طھط³ظ…ظٹط©|ظپط´ظ„ ط§ظ„طھط¹ط±ظٹظپ'), 'namefail'],
+  [RegExp(r'Terminal ID|ظ…ط´ ظˆط§ط¶ط­|ظ…ط´ ظ‚ط§ط¯ط± ط£ط¹ط±ظپ ط§ظ„ظ…ط§ظƒظٹظ†ط©|ظ†ظپط³ ظ…ط§ظƒظٹظ†ط©|ط§طھط¹ط±ظپطھ ظƒظ…ط§ظ†|ط§ظ„ظˆط­ط¯ط© ط§طھط­ط¯ط¯طھ'), 'idweak'],
 ];
 
 _NoteKind _noteKindOf(String n) {
@@ -5730,10 +6128,10 @@ _MStats _statsOf(MResult r) {
     return m == null ? null : int.tryParse(m.group(1)!);
   }
 
-  s.pages = g(RegExp(r'(\d+)\s*صفحة'));
-  s.full = g(RegExp(r'RRN\s*(?:مقروء|كامل)\s*(\d+)'));
-  s.partial = g(RegExp(r'ناقص القراءة\s*(\d+)'));
-  final m = RegExp(r'التسلسل\s*(\d+)-(\d+)\s*\((\d+)\)').firstMatch(d);
+  s.pages = g(RegExp(r'(\d+)\s*طµظپط­ط©'));
+  s.full = g(RegExp(r'RRN\s*(?:ظ…ظ‚ط±ظˆط،|ظƒط§ظ…ظ„)\s*(\d+)'));
+  s.partial = g(RegExp(r'ظ†ط§ظ‚طµ ط§ظ„ظ‚ط±ط§ط،ط©\s*(\d+)'));
+  final m = RegExp(r'ط§ظ„طھط³ظ„ط³ظ„\s*(\d+)-(\d+)\s*\((\d+)\)').firstMatch(d);
   if (m != null) {
     s.seqMin = int.tryParse(m.group(1)!);
     s.seqMax = int.tryParse(m.group(2)!);
@@ -5749,15 +6147,27 @@ class _St {
 }
 
 _St _statusOf(MResult r) {
-  if (r.excluded) return const _St('مستبعد', 'Excluded', Colors.grey);
-  if (r.pending) return const _St('لسه ما اتعدّش', 'Not counted yet', Colors.blueGrey);
-  if (r.verdict > 0) return const _St('اتراجع: صح', 'Reviewed: OK', Colors.green);
-  if (r.ok) return const _St('سليم', 'OK', Colors.green);
-  return const _St('محتاج مراجعة', 'Needs review', Colors.orange);
+  if (r.excluded) return const _St('ظ…ط³طھط¨ط¹ط¯', 'Excluded', Colors.grey);
+  if (r.pending) return const _St('ظ„ط³ظ‡ ظ…ط§ ط§طھط¹ط¯ظ‘ط´', 'Not counted yet', Colors.blueGrey);
+  if (r.verdict > 0) return const _St('ط§طھط±ط§ط¬ط¹: طµط­', 'Reviewed: OK', Colors.green);
+  if (r.ok) return const _St('ط³ظ„ظٹظ…', 'OK', Colors.green);
+  return const _St('ظ…ط­طھط§ط¬ ظ…ط±ط§ط¬ط¹ط©', 'Needs review', Colors.orange);
 }
 
-// الباتش = العدد اللي مكتوب في خانة "الصح" (من إيصال الباتش)، والفعلي = العدد اللي التطبيق عدّه
-int? _batchOf(MResult r) => int.tryParse(r.ctl.text.trim());
+// ط§ظ„ط¨ط§طھط´ = ط§ظ„ط¹ط¯ط¯ ط§ظ„ظ„ظٹ ظ…ظƒطھظˆط¨ ظپظٹ ط®ط§ظ†ط© "ط§ظ„طµط­" (ظ…ظ† ط¥ظٹطµط§ظ„ ط§ظ„ط¨ط§طھط´)طŒ ظˆط§ظ„ظپط¹ظ„ظٹ = ط§ظ„ط¹ط¯ط¯ ط§ظ„ظ„ظٹ ط§ظ„طھط·ط¨ظٹظ‚ ط¹ط¯ظ‘ظ‡
+int? _batchManual(MResult r) => int.tryParse(r.ctl.text.trim());
+int? _batchAutoOf(MResult r) => r.orderNum == null ? null : closingTxn.value[r.orderNum!];
+int? _batchOf(MResult r) => _batchManual(r) ?? _batchAutoOf(r);
+bool _batchIsAuto(MResult r) => _batchManual(r) == null && _batchAutoOf(r) != null;
+
+// ظ…ط·ط§ط¨ظ‚ط© ط§ظ„ط¨ط§طھط´: ظ„ظˆ ط§ظ†طھ ط±ط§ط¬ط¹طھ ط§ظ„ظ…ظ„ظپ ظٹط¯ظˆظٹ ظˆط¹ظ„ظ‘ظ…طھظ‡ طµط­ âœ“ ظٹطھط­ط³ط¨ ظ…ط·ط§ط¨ظ‚ (ط£ط®ط¶ط±) ط­طھظ‰ ظ„ظˆ ط§ظ„ط¹ط¯ط¯ ط§ظ„ظ…ظ‚ط±ظˆط، ظ…ط®طھظ„ظپ ط¹ظ† ط±ظ‚ظ… ط§ظ„ط¨ط§طھط´.
+// null = ظ…ظپظٹط´ ط­ط§ط¬ط© ظ†ظ‚ط§ط±ظ†ظ‡ط§. ط§ظ„ط±ظ‚ظ… ط§ظ„ظ„ظٹ ط¨طھظƒطھط¨ظ‡ ط¨ط¥ظٹط¯ظƒ ظپظٹ ط®ط§ظ†ط© "ط§ظ„طµط­" ط¨ظٹط؛ظ„ط¨ ط§ظ„ط±ظ‚ظ… ط§ظ„طھظ„ظ‚ط§ط¦ظٹ ظ…ظ† ط§ظ„طھظ‚ظپظٹظ„.
+bool? _batchMatch(MResult r) {
+  if (r.excluded || r.pending) return null;
+  if (r.verdict > 0) return true;
+  final d = _batchDiff(r);
+  return d == null ? null : d == 0;
+}
 
 int? _batchDiff(MResult r) {
   final b = _batchOf(r);
@@ -5766,19 +6176,25 @@ int? _batchDiff(MResult r) {
 }
 
 String _diffText(BuildContext c, int d) => d == 0
-    ? _l(c, 'مطابق ✓', 'Match ✓')
-    : (d > 0 ? _l(c, 'ناقص $d', 'Missing $d') : _l(c, 'زيادة ${-d}', 'Extra ${-d}'));
+    ? _l(c, 'ظ…ط·ط§ط¨ظ‚ âœ“', 'Match âœ“')
+    : (d > 0 ? _l(c, 'ظ†ط§ظ‚طµ $d', 'Missing $d') : _l(c, 'ط²ظٹط§ط¯ط© ${-d}', 'Extra ${-d}'));
 
 MaterialColor _diffColor(int d) => d == 0 ? Colors.green : (d > 0 ? Colors.red : Colors.orange);
 
 String _mSummary(BuildContext c, MResult r) {
-  if (r.excluded) return _l(c, 'مستبعد (علامة غلط)', 'Excluded (marked wrong)');
-  if (r.pending) return _l(c, 'لسه ما اتعدّش (اضغط بدء العد)', 'Not counted yet (tap Start counting)');
-  final b = StringBuffer('${_l(c, 'عدد المعاملات', 'Transactions')}: ${r.count}');
+  if (r.excluded) return _l(c, 'ظ…ط³طھط¨ط¹ط¯ (ط¹ظ„ط§ظ…ط© ط؛ظ„ط·)', 'Excluded (marked wrong)');
+  if (r.pending) return _l(c, 'ظ„ط³ظ‡ ظ…ط§ ط§طھط¹ط¯ظ‘ط´ (ط§ط¶ط؛ط· ط¨ط¯ط، ط§ظ„ط¹ط¯)', 'Not counted yet (tap Start counting)');
+  final b = StringBuffer('${_l(c, 'ط¹ط¯ط¯ ط§ظ„ظ…ط¹ط§ظ…ظ„ط§طھ', 'Transactions')}: ${r.count}');
   final bt = _batchOf(r);
   final d = _batchDiff(r);
   if (bt != null && d != null) {
-    b.write('\n${_l(c, 'الباتش', 'Batch')}: $bt • ${_l(c, 'الفعلي', 'Actual')}: ${r.count} • ${_diffText(c, d)}');
+    final tag = _batchIsAuto(r)
+        ? _l(c, ' (ظ…ظ† ط§ظ„طھظ‚ظپظٹظ„)', ' (from closing)')
+        : (_batchManual(r) != null ? _l(c, ' (ظٹط¯ظˆظٹ)', ' (manual)') : '');
+    final res = (r.verdict > 0 && d != 0)
+        ? _l(c, 'ط±ط§ط¬ط¹طھظ‡ ظٹط¯ظˆظٹ: طµط­ âœ“', 'Manually reviewed: OK âœ“')
+        : _diffText(c, d);
+    b.write('\n${_l(c, 'ط§ظ„ط¨ط§طھط´', 'Batch')}: $bt$tag â€¢ ${_l(c, 'ط§ظ„ظپط¹ظ„ظٹ', 'Actual')}: ${r.count} â€¢ $res');
   }
   return b.toString();
 }
@@ -5859,25 +6275,25 @@ class _ReceiptReportPageState extends State<ReceiptReportPage> {
     String pad6(int? n) => (n ?? 0).toString().padLeft(6, '0');
 
     final numbers = <Widget>[
-      kv(_l(context, 'عدد المعاملات المعدودة', 'Counted transactions'), r.pending ? '—' : '${r.count}'),
-      if (stats.pages != null) kv(_l(context, 'عدد الصفحات', 'Pages'), '${stats.pages}'),
-      if (stats.full != null) kv(_l(context, 'إيصالات مقروءة كاملة', 'Fully read receipts'), '${stats.full}'),
+      kv(_l(context, 'ط¹ط¯ط¯ ط§ظ„ظ…ط¹ط§ظ…ظ„ط§طھ ط§ظ„ظ…ط¹ط¯ظˆط¯ط©', 'Counted transactions'), r.pending ? 'â€”' : '${r.count}'),
+      if (stats.pages != null) kv(_l(context, 'ط¹ط¯ط¯ ط§ظ„طµظپط­ط§طھ', 'Pages'), '${stats.pages}'),
+      if (stats.full != null) kv(_l(context, 'ط¥ظٹطµط§ظ„ط§طھ ظ…ظ‚ط±ظˆط،ط© ظƒط§ظ…ظ„ط©', 'Fully read receipts'), '${stats.full}'),
       if (stats.partial != null)
-        kv(_l(context, 'إيصالات ناقصة القراءة', 'Partially read receipts'), '${stats.partial}',
+        kv(_l(context, 'ط¥ظٹطµط§ظ„ط§طھ ظ†ط§ظ‚طµط© ط§ظ„ظ‚ط±ط§ط،ط©', 'Partially read receipts'), '${stats.partial}',
             color: stats.partial! > 0 ? Colors.orange : null),
       if (stats.seqMin != null)
-        kv(_l(context, 'تسلسل الإيصالات', 'Receipt sequence'), '${pad6(stats.seqMin)} → ${pad6(stats.seqMax)}'),
+        kv(_l(context, 'طھط³ظ„ط³ظ„ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ', 'Receipt sequence'), '${pad6(stats.seqMin)} â†’ ${pad6(stats.seqMax)}'),
       if (stats.seqLen != null)
-        kv(_l(context, 'العدد المتوقع من التسلسل', 'Expected from sequence'), '${stats.seqLen}'),
+        kv(_l(context, 'ط§ظ„ط¹ط¯ط¯ ط§ظ„ظ…طھظˆظ‚ط¹ ظ…ظ† ط§ظ„طھط³ظ„ط³ظ„', 'Expected from sequence'), '${stats.seqLen}'),
       if (stats.seqLen != null && !r.pending)
         kv(
-            _l(context, 'الفرق عن التسلسل', 'Difference from sequence'),
-            r.count == stats.seqLen ? _l(context, 'مطابق ✓', 'Match ✓') : '${r.count - stats.seqLen!}',
+            _l(context, 'ط§ظ„ظپط±ظ‚ ط¹ظ† ط§ظ„طھط³ظ„ط³ظ„', 'Difference from sequence'),
+            r.count == stats.seqLen ? _l(context, 'ظ…ط·ط§ط¨ظ‚ âœ“', 'Match âœ“') : '${r.count - stats.seqLen!}',
             color: r.count == stats.seqLen ? Colors.green : Colors.orange),
     ];
 
     return Scaffold(
-      appBar: AppBar(title: w.Text(_l(context, 'تقرير الإيصال', 'Receipt report'))),
+      appBar: AppBar(title: w.Text(_l(context, 'طھظ‚ط±ظٹط± ط§ظ„ط¥ظٹطµط§ظ„', 'Receipt report'))),
       body: ListView(
         padding: const EdgeInsets.all(8),
         children: [
@@ -5891,7 +6307,7 @@ class _ReceiptReportPageState extends State<ReceiptReportPage> {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(r.newName ?? '؟ ${r.pdfName}',
+                        child: Text(r.newName ?? 'طں ${r.pdfName}',
                             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                       ),
                       const SizedBox(width: 8),
@@ -5899,13 +6315,13 @@ class _ReceiptReportPageState extends State<ReceiptReportPage> {
                     ],
                   ),
                   const SizedBox(height: 4),
-                  w.Text('${_l(context, 'الملف الأصلي', 'Original file')}: ${r.pdfName}',
+                  w.Text('${_l(context, 'ط§ظ„ظ…ظ„ظپ ط§ظ„ط£طµظ„ظٹ', 'Original file')}: ${r.pdfName}',
                       style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
                 ],
               ),
             ),
           ),
-          section(_l(context, 'الأرقام', 'Numbers'), [
+          section(_l(context, 'ط§ظ„ط£ط±ظ‚ط§ظ…', 'Numbers'), [
             ...numbers,
             if (r.detail.isNotEmpty)
               Padding(
@@ -5913,14 +6329,15 @@ class _ReceiptReportPageState extends State<ReceiptReportPage> {
                 child: Text(r.detail, style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
               ),
           ]),
-          section(_l(context, 'ربط الباتش', 'Batch link'), [
+          section(_l(context, 'ط±ط¨ط· ط§ظ„ط¨ط§طھط´', 'Batch link'), [
             TextField(
               controller: r.ctl,
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
                 isDense: true,
-                labelText: _l(context, 'عدد معاملات الباتش (من إيصال التقفيل)',
-                    'Batch transaction count (from the closing receipt)'),
+                labelText: _l(context, 'ط¹ط¯ط¯ ظ…ط¹ط§ظ…ظ„ط§طھ ط§ظ„ط¨ط§طھط´ (ط¨ظٹطھظ‚ط±ظٹ ظ…ظ† ط§ظ„طھظ‚ظپظٹظ„طŒ ط§ظƒطھط¨ ط±ظ‚ظ… ظ„ظˆ ط¹ط§ظٹط² طھط؛ظٹظ‘ط±ظ‡)',
+                    'Batch transaction count (read from closing; type a number to override)'),
+                hintText: _batchAutoOf(r)?.toString(),
               ),
               onChanged: (_) {
                 widget.onChanged();
@@ -5930,28 +6347,31 @@ class _ReceiptReportPageState extends State<ReceiptReportPage> {
             const SizedBox(height: 8),
             if (bd == null || bt == null)
               w.Text(
-                  _l(context, 'اكتب عدد معاملات الباتش هنا علشان نقارنه بالعدد الفعلي.',
-                      'Enter the batch transaction count here to compare it with the actual count.'),
+                  _l(context, 'ظ…ظپظٹط´ ط¹ط¯ط¯ ط¨ط§طھط´ ط§طھظ‚ط±ط§ ظ…ظ† ط§ظ„طھظ‚ظپظٹظ„ ظ„ظ…ط§ظƒظٹظ†ط© ط¯ظٹ. ط§ظƒطھط¨ظ‡ ظ‡ظ†ط§ ط¹ظ„ط´ط§ظ† ظ†ظ‚ط§ط±ظ†ظ‡ ط¨ط§ظ„ط¹ط¯ط¯ ط§ظ„ظپط¹ظ„ظٹ.',
+                      'No batch count was read from closing for this machine. Enter it here to compare with the actual count.'),
                   style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant))
             else
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: _tintBg(context, _diffColor(bd), soft: true),
-                  border: Border.all(color: _tintBorder(context, _diffColor(bd))),
+                  color: _tintBg(context, r.verdict > 0 ? Colors.green : _diffColor(bd), soft: true),
+                  border: Border.all(color: _tintBorder(context, r.verdict > 0 ? Colors.green : _diffColor(bd))),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Column(
                   children: [
-                    kv(_l(context, 'الباتش', 'Batch'), '$bt'),
-                    kv(_l(context, 'الفعلي', 'Actual'), '${r.count}'),
-                    kv(_l(context, 'الفرق', 'Difference'), _diffText(context, bd),
-                        color: _tintFg(context, _diffColor(bd))),
+                    kv(_l(context, 'ط§ظ„ط¨ط§طھط´', 'Batch'),
+                        '$bt${_batchIsAuto(r) ? _l(context, ' (ظ…ظ† ط§ظ„طھظ‚ظپظٹظ„)', ' (from closing)') : ''}'),
+                    kv(_l(context, 'ط§ظ„ظپط¹ظ„ظٹ', 'Actual'), '${r.count}'),
+                    kv(
+                        _l(context, 'ط§ظ„ظپط±ظ‚', 'Difference'),
+                        '${_diffText(context, bd)}${r.verdict > 0 && bd != 0 ? _l(context, ' â€¢ ط±ط§ط¬ط¹طھظ‡ ظٹط¯ظˆظٹ: طµط­ âœ“', ' â€¢ manually reviewed: OK âœ“') : ''}',
+                        color: _tintFg(context, r.verdict > 0 ? Colors.green : _diffColor(bd))),
                   ],
                 ),
               ),
           ]),
-          section(_l(context, 'الملاحظات', 'Notes'), [
+          section(_l(context, 'ط§ظ„ظ…ظ„ط§ط­ط¸ط§طھ', 'Notes'), [
             if (kinds.isEmpty)
               Container(
                 padding: const EdgeInsets.all(10),
@@ -5960,15 +6380,15 @@ class _ReceiptReportPageState extends State<ReceiptReportPage> {
                   border: Border.all(color: _tintBorder(context, Colors.green)),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: w.Text(_l(context, 'مفيش ملاحظات ✓', 'No notes ✓'),
+                child: w.Text(_l(context, 'ظ…ظپظٹط´ ظ…ظ„ط§ط­ط¸ط§طھ âœ“', 'No notes âœ“'),
                     style: TextStyle(fontWeight: FontWeight.bold, color: _tintFg(context, Colors.green))),
               ),
             for (final k in kinds)
               Builder(builder: (context) {
                 final MaterialColor col = k.sev == 2 ? Colors.red : (k.sev == 1 ? Colors.orange : Colors.blue);
                 final sevLabel = k.sev == 2
-                    ? _l(context, 'لازم تراجع', 'Must review')
-                    : (k.sev == 1 ? _l(context, 'انتبه', 'Heads up') : _l(context, 'معلومة', 'Info'));
+                    ? _l(context, 'ظ„ط§ط²ظ… طھط±ط§ط¬ط¹', 'Must review')
+                    : (k.sev == 1 ? _l(context, 'ط§ظ†طھط¨ظ‡', 'Heads up') : _l(context, 'ظ…ط¹ظ„ظˆظ…ط©', 'Info'));
                 return Container(
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.all(10),
@@ -5997,10 +6417,10 @@ class _ReceiptReportPageState extends State<ReceiptReportPage> {
                       for (final n in groups[k.key]!)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 2),
-                          child: Text('• $n', style: const TextStyle(fontSize: 12)),
+                          child: Text('â€¢ $n', style: const TextStyle(fontSize: 12)),
                         ),
                       const SizedBox(height: 6),
-                      w.Text('${_l(context, 'تعمل إيه؟', 'What to do')}: ${_l(context, k.fixAr, k.fixEn)}',
+                      w.Text('${_l(context, 'طھط¹ظ…ظ„ ط¥ظٹظ‡طں', 'What to do')}: ${_l(context, k.fixAr, k.fixEn)}',
                           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
                     ],
                   ),
@@ -6011,33 +6431,33 @@ class _ReceiptReportPageState extends State<ReceiptReportPage> {
             spacing: 6,
             runSpacing: 6,
             children: [
-              _mini(Icons.picture_as_pdf, _l(context, 'فتح الملف', 'Open file'), widget.onOpenPdf, filled: true),
-              _mini(Icons.check, _l(context, 'صح ✓', 'OK ✓'), !can
+              _mini(Icons.picture_as_pdf, _l(context, 'ظپطھط­ ط§ظ„ظ…ظ„ظپ', 'Open file'), widget.onOpenPdf, filled: true),
+              _mini(Icons.check, _l(context, 'طµط­ âœ“', 'OK âœ“'), !can
                   ? null
                   : () {
                       widget.onVerdict(1);
                       setState(() {});
                     }),
-              _mini(Icons.close, _l(context, 'غلط ✗', 'Wrong ✗'), !can
+              _mini(Icons.close, _l(context, 'ط؛ظ„ط· âœ—', 'Wrong âœ—'), !can
                   ? null
                   : () {
                       widget.onVerdict(-1);
                       setState(() {});
                     }),
               if (r.verdict != 0)
-                _mini(Icons.undo, _l(context, 'إلغاء العلامة', 'Clear mark'), !can
+                _mini(Icons.undo, _l(context, 'ط¥ظ„ط؛ط§ط، ط§ظ„ط¹ظ„ط§ظ…ط©', 'Clear mark'), !can
                     ? null
                     : () {
                         widget.onVerdict(0);
                         setState(() {});
                       }),
-              _mini(Icons.refresh, _l(context, 'إعادة العد', 'Recount'), !can
+              _mini(Icons.refresh, _l(context, 'ط¥ط¹ط§ط¯ط© ط§ظ„ط¹ط¯', 'Recount'), !can
                   ? null
                   : () {
                       widget.onRecount();
                       setState(() {});
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                          content: w.Text(_l(context, 'اتعلّم للعد. ارجع واضغط "بدء العد".',
+                          content: w.Text(_l(context, 'ط§طھط¹ظ„ظ‘ظ… ظ„ظ„ط¹ط¯. ط§ط±ط¬ط¹ ظˆط§ط¶ط؛ط· "ط¨ط¯ط، ط§ظ„ط¹ط¯".',
                               'Marked for counting. Go back and tap "Start counting".'))));
                     }),
             ],
@@ -6065,7 +6485,7 @@ class MachinesReportPage extends StatefulWidget {
 }
 
 class _MachinesReportPageState extends State<MachinesReportPage> {
-  int filter = 0; // 0 الكل، 1 مراجعة، 2 فروق الباتش
+  int filter = 0; // 0 ط§ظ„ظƒظ„طŒ 1 ظ…ط±ط§ط¬ط¹ط©طŒ 2 ظپط±ظˆظ‚ ط§ظ„ط¨ط§طھط´
 
   @override
   Widget build(BuildContext context) {
@@ -6078,12 +6498,12 @@ class _MachinesReportPageState extends State<MachinesReportPage> {
     final excl = all.where((r) => r.excluded).length;
     final pend = all.where((r) => r.pending).length;
     final linked = counted.where((r) => _batchOf(r) != null).toList();
-    final matched = linked.where((r) => _batchDiff(r) == 0).length;
+    final matched = linked.where((r) => _batchMatch(r) == true).length;
     final diffs = linked.length - matched;
     final batchSum = linked.fold<int>(0, (a, r) => a + _batchOf(r)!);
     final actualSum = linked.fold<int>(0, (a, r) => a + r.count);
     final shown = all
-        .where((r) => filter == 0 || (filter == 1 && !r.ok) || (filter == 2 && (_batchDiff(r) ?? 0) != 0))
+        .where((r) => filter == 0 || (filter == 1 && !r.ok) || (filter == 2 && _batchMatch(r) == false))
         .toList();
 
     Widget stat(String label, String value, MaterialColor c) => Container(
@@ -6114,7 +6534,7 @@ class _MachinesReportPageState extends State<MachinesReportPage> {
         );
 
     return Scaffold(
-      appBar: AppBar(title: w.Text(_l(context, 'تقرير إيصالات الدفع', 'Payment receipts report'))),
+      appBar: AppBar(title: w.Text(_l(context, 'طھظ‚ط±ظٹط± ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹', 'Payment receipts report'))),
       body: ListView(
         padding: const EdgeInsets.all(8),
         children: [
@@ -6122,12 +6542,12 @@ class _MachinesReportPageState extends State<MachinesReportPage> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              stat(_l(context, 'إجمالي المعاملات', 'Total transactions'), '$totalTx', Colors.blue),
-              stat(_l(context, 'ملفات', 'Files'), '${all.length}', Colors.blueGrey),
-              stat(_l(context, 'اتعدّت', 'Counted'), '${counted.length}', Colors.green),
-              stat(_l(context, 'محتاج مراجعة', 'Need review'), '$reviewN', reviewN > 0 ? Colors.orange : Colors.green),
-              stat(_l(context, 'مستبعد', 'Excluded'), '$excl', Colors.grey),
-              stat(_l(context, 'لسه ما اتعدّتش', 'Not counted'), '$pend', pend > 0 ? Colors.amber : Colors.green),
+              stat(_l(context, 'ط¥ط¬ظ…ط§ظ„ظٹ ط§ظ„ظ…ط¹ط§ظ…ظ„ط§طھ', 'Total transactions'), '$totalTx', Colors.blue),
+              stat(_l(context, 'ظ…ظ„ظپط§طھ', 'Files'), '${all.length}', Colors.blueGrey),
+              stat(_l(context, 'ط§طھط¹ط¯ظ‘طھ', 'Counted'), '${counted.length}', Colors.green),
+              stat(_l(context, 'ظ…ط­طھط§ط¬ ظ…ط±ط§ط¬ط¹ط©', 'Need review'), '$reviewN', reviewN > 0 ? Colors.orange : Colors.green),
+              stat(_l(context, 'ظ…ط³طھط¨ط¹ط¯', 'Excluded'), '$excl', Colors.grey),
+              stat(_l(context, 'ظ„ط³ظ‡ ظ…ط§ ط§طھط¹ط¯ظ‘طھط´', 'Not counted'), '$pend', pend > 0 ? Colors.amber : Colors.green),
             ],
           ),
           const SizedBox(height: 8),
@@ -6138,22 +6558,22 @@ class _MachinesReportPageState extends State<MachinesReportPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  w.Text(_l(context, 'ربط الباتش', 'Batch link'),
+                  w.Text(_l(context, 'ط±ط¨ط· ط§ظ„ط¨ط§طھط´', 'Batch link'),
                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                   const SizedBox(height: 6),
                   if (linked.isEmpty)
                     w.Text(
-                        _l(context, 'اكتب عدد معاملات الباتش في خانة "الصح" لكل ماكينة (أو من تقرير الإيصال) وهيظهر الربط هنا.',
-                            'Enter the batch transaction count in the "Correct" field of each machine (or in the receipt report) and the link will show here.'),
+                        _l(context, 'ط¹ط¯ط¯ ط§ظ„ط¨ط§طھط´ ط¨ظٹطھظ‚ط±ظٹ طھظ„ظ‚ط§ط¦ظٹ ظ…ظ† ط¥ظٹطµط§ظ„ط§طھ طھط§ط¨ ط§ظ„طھظ‚ظپظٹظ„. ظ„ظˆ ظ…ط§ ط¸ظ‡ط±ط´ ط§ظƒطھط¨ظ‡ ظپظٹ ط®ط§ظ†ط© "ط§ظ„طµط­" ط£ظˆ ظپظٹ طھظ‚ط±ظٹط± ط§ظ„ط¥ظٹطµط§ظ„.',
+                            'The batch count is read automatically from the closing tab receipts. If it is missing, type it in the "Correct" field or in the receipt report.'),
                         style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant))
                   else ...[
-                    kv(_l(context, 'ماكينات مربوطة', 'Linked machines'), '${linked.length} / ${counted.length}'),
-                    kv(_l(context, 'مطابقة', 'Matching'), '$matched', color: Colors.green),
-                    kv(_l(context, 'فيها فرق', 'With a difference'), '$diffs',
+                    kv(_l(context, 'ظ…ط§ظƒظٹظ†ط§طھ ظ…ط±ط¨ظˆط·ط©', 'Linked machines'), '${linked.length} / ${counted.length}'),
+                    kv(_l(context, 'ظ…ط·ط§ط¨ظ‚ط©', 'Matching'), '$matched', color: Colors.green),
+                    kv(_l(context, 'ظپظٹظ‡ط§ ظپط±ظ‚', 'With a difference'), '$diffs',
                         color: diffs > 0 ? Colors.red : Colors.green),
-                    kv(_l(context, 'إجمالي الباتشات', 'Batch total'), '$batchSum'),
-                    kv(_l(context, 'إجمالي الفعلي', 'Actual total'), '$actualSum'),
-                    kv(_l(context, 'صافي الفرق', 'Net difference'), _diffText(context, batchSum - actualSum),
+                    kv(_l(context, 'ط¥ط¬ظ…ط§ظ„ظٹ ط§ظ„ط¨ط§طھط´ط§طھ', 'Batch total'), '$batchSum'),
+                    kv(_l(context, 'ط¥ط¬ظ…ط§ظ„ظٹ ط§ظ„ظپط¹ظ„ظٹ', 'Actual total'), '$actualSum'),
+                    kv(_l(context, 'طµط§ظپظٹ ط§ظ„ظپط±ظ‚', 'Net difference'), _diffText(context, batchSum - actualSum),
                         color: _tintFg(context, _diffColor(batchSum - actualSum))),
                   ],
                 ],
@@ -6170,7 +6590,7 @@ class _MachinesReportPageState extends State<MachinesReportPage> {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: w.Text(
-                  '⚠️ ${_l(context, 'ماكينات ما وصلش ملفها', 'Machines with no file')} (${widget.missing.length}): ${widget.missing.join(' ، ')}',
+                  'âڑ ï¸ڈ ${_l(context, 'ظ…ط§ظƒظٹظ†ط§طھ ظ…ط§ ظˆطµظ„ط´ ظ…ظ„ظپظ‡ط§', 'Machines with no file')} (${widget.missing.length}): ${widget.missing.join(' طŒ ')}',
                   style: const TextStyle(fontSize: 13)),
             ),
           ],
@@ -6179,9 +6599,9 @@ class _MachinesReportPageState extends State<MachinesReportPage> {
             spacing: 6,
             children: [
               for (final o in [
-                [0, _l(context, 'الكل', 'All')],
-                [1, _l(context, 'مراجعة ($reviewN)', 'Review ($reviewN)')],
-                [2, _l(context, 'فروق الباتش ($diffs)', 'Batch differences ($diffs)')],
+                [0, _l(context, 'ط§ظ„ظƒظ„', 'All')],
+                [1, _l(context, 'ظ…ط±ط§ط¬ط¹ط© ($reviewN)', 'Review ($reviewN)')],
+                [2, _l(context, 'ظپط±ظˆظ‚ ط§ظ„ط¨ط§طھط´ ($diffs)', 'Batch differences ($diffs)')],
               ])
                 ChoiceChip(
                   label: w.Text(o[1] as String, style: const TextStyle(fontSize: 13)),
@@ -6201,7 +6621,7 @@ class _MachinesReportPageState extends State<MachinesReportPage> {
                   await widget.openReport(r);
                   if (mounted) setState(() {});
                 },
-                title: Text(r.newName ?? '؟ ${r.pdfName}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                title: Text(r.newName ?? 'طں ${r.pdfName}', style: const TextStyle(fontWeight: FontWeight.bold)),
                 subtitle: w.Text(_mSummary(context, r)),
                 trailing: _statusChip(context, _statusOf(r)),
               ),
@@ -6209,7 +6629,7 @@ class _MachinesReportPageState extends State<MachinesReportPage> {
           if (shown.isEmpty)
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Center(child: w.Text(_l(context, 'مفيش ملفات في الفلتر ده.', 'No files in this filter.'))),
+              child: Center(child: w.Text(_l(context, 'ظ…ظپظٹط´ ظ…ظ„ظپط§طھ ظپظٹ ط§ظ„ظپظ„طھط± ط¯ظ‡.', 'No files in this filter.'))),
             ),
           const SizedBox(height: 16),
         ],
@@ -6226,15 +6646,15 @@ class MachinesPage extends StatefulWidget {
 }
 
 class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver {
-  String? pdfDir; // null = مستندات واتساب (تلقائي)
+  String? pdfDir; // null = ظ…ط³طھظ†ط¯ط§طھ ظˆط§طھط³ط§ط¨ (طھظ„ظ‚ط§ط¦ظٹ)
   int days = 0;
   bool skipDone = true;
   bool reviewOnly = false;
-  bool namingDone = false; // التسمية خلصت (حتى لو العد لسه شغال): زرار الإرسال يتفعل
+  bool namingDone = false; // ط§ظ„طھط³ظ…ظٹط© ط®ظ„طµطھ (ط­طھظ‰ ظ„ظˆ ط§ظ„ط¹ط¯ ظ„ط³ظ‡ ط´ط؛ط§ظ„): ط²ط±ط§ط± ط§ظ„ط¥ط±ط³ط§ظ„ ظٹطھظپط¹ظ„
   bool busy = false;
   bool stopReq = false;
   double progressValue = 0;
-  String status = 'اضغط "فحص وإعادة تسمية" لفحص إيصالات الدفع من مستندات واتساب.';
+  String status = 'ط§ط¶ط؛ط· "ظپط­طµ ظˆط¥ط¹ط§ط¯ط© طھط³ظ…ظٹط©" ظ„ظپط­طµ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹ ظ…ظ† ظ…ط³طھظ†ط¯ط§طھ ظˆط§طھط³ط§ط¨.';
   final List<MResult> results = [];
   AppLifecycleState _life = AppLifecycleState.resumed;
   String destDir = loadMOut();
@@ -6246,19 +6666,23 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     pdfDir = loadPdfDir();
     days = sharedDays.value;
     sharedDays.addListener(_syncDays);
+    wipeSignal.addListener(_onWipe);
+    closingTxn.addListener(_onClosing);
     results.addAll(loadMState());
     results.sort(_cmpM);
     final pend = results.where((r) => r.pending).length;
     if (results.isNotEmpty) {
       status = pend > 0
-          ? 'فيه $pend ملف لسه ما اتعدّش. اضغط \"بدء العد\" لما تحب.'
-          : 'آخر نتيجة: ${results.length} ملف.';
+          ? 'ظپظٹظ‡ $pend ظ…ظ„ظپ ظ„ط³ظ‡ ظ…ط§ ط§طھط¹ط¯ظ‘ط´. ط§ط¶ط؛ط· \"ط¨ط¯ط، ط§ظ„ط¹ط¯\" ظ„ظ…ط§ طھط­ط¨.'
+          : 'ط¢ط®ط± ظ†طھظٹط¬ط©: ${results.length} ظ…ظ„ظپ.';
     }
   }
 
   @override
   void dispose() {
     sharedDays.removeListener(_syncDays);
+    wipeSignal.removeListener(_onWipe);
+    closingTxn.removeListener(_onClosing);
     WidgetsBinding.instance.removeObserver(this);
     for (final r in results) {
       r.ctl.dispose();
@@ -6277,10 +6701,28 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     setState(() => days = sharedDays.value);
   }
 
+  void _onWipe() {
+    if (!mounted) return;
+    for (final r in results) {
+      r.ctl.dispose();
+    }
+    setState(() {
+      results.clear();
+      progressValue = 0;
+      namingDone = false;
+      reviewOnly = false;
+      status = 'طھظ… ظ…ط³ط­ ظƒظ„ ط­ط§ط¬ط©. ط§ط¶ط؛ط· "ظپط­طµ ظˆط¥ط¹ط§ط¯ط© طھط³ظ…ظٹط©" ظ„ط¨ط¯ط، ظٹظˆظ… ط¬ط¯ظٹط¯.';
+    });
+  }
+
+  void _onClosing() {
+    if (mounted) setState(() {});
+  }
+
   Future<void> openPdf(String? path) async {
     if (path == null || !File(path).existsSync()) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الملف مش موجود.')),
+        const SnackBar(content: Text('ط§ظ„ظ…ظ„ظپ ظ…ط´ ظ…ظˆط¬ظˆط¯.')),
       );
       return;
     }
@@ -6290,14 +6732,14 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     } catch (_) {}
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('مفيش برنامج يفتح الـ PDF.')),
+      const SnackBar(content: Text('ظ…ظپظٹط´ ط¨ط±ظ†ط§ظ…ط¬ ظٹظپطھط­ ط§ظ„ظ€ PDF.')),
     );
   }
 
   Future<void> pickDir() async {
     final perm = await Permission.manageExternalStorage.request();
     if (!perm.isGranted) {
-      setState(() => status = 'لازم تسمح بالوصول لكل الملفات الأول.');
+      setState(() => status = 'ظ„ط§ط²ظ… طھط³ظ…ط­ ط¨ط§ظ„ظˆطµظˆظ„ ظ„ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ط£ظˆظ„.');
       return;
     }
     if (!mounted) return;
@@ -6314,7 +6756,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   Future<void> pickOut() async {
     final perm = await Permission.manageExternalStorage.request();
     if (!perm.isGranted) {
-      setState(() => status = 'لازم تسمح بالوصول لكل الملفات الأول.');
+      setState(() => status = 'ظ„ط§ط²ظ… طھط³ظ…ط­ ط¨ط§ظ„ظˆطµظˆظ„ ظ„ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ط£ظˆظ„.');
       return;
     }
     if (!mounted) return;
@@ -6327,7 +6769,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
         final t = File('$res/.write_test')..writeAsStringSync('x');
         t.deleteSync();
       } catch (_) {
-        setState(() => status = 'مش قادر أكتب في الفولدر ده: $res');
+        setState(() => status = 'ظ…ط´ ظ‚ط§ط¯ط± ط£ظƒطھط¨ ظپظٹ ط§ظ„ظپظˆظ„ط¯ط± ط¯ظ‡: $res');
         return;
       }
       saveMOut(res);
@@ -6350,7 +6792,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
 
   Future<void> openFile(String? path, String mime) async {
     if (path == null || !File(path).existsSync()) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الملف مش موجود.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ط§ظ„ظ…ظ„ظپ ظ…ط´ ظ…ظˆط¬ظˆط¯.')));
       return;
     }
     try {
@@ -6373,11 +6815,11 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     await Clipboard.setData(ClipboardData(text: destDir));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('مقدرتش أفتح الفولدر. المسار اتنسخ: $destDir')),
+      SnackBar(content: Text('ظ…ظ‚ط¯ط±طھط´ ط£ظپطھط­ ط§ظ„ظپظˆظ„ط¯ط±. ط§ظ„ظ…ط³ط§ط± ط§طھظ†ط³ط®: $destDir')),
     );
   }
 
-  // ───── المشاركة: كل الملفات مرة واحدة، أو ملف ملف ─────
+  // â”€â”€â”€â”€â”€ ط§ظ„ظ…ط´ط§ط±ظƒط©: ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ ظ…ط±ط© ظˆط§ط­ط¯ط©طŒ ط£ظˆ ظ…ظ„ظپ ظ…ظ„ظپ â”€â”€â”€â”€â”€
   Future<void> shareAll() async {
     final files = results
         .where((r) => !r.excluded && r.newName != null && r.openPath != null && File(r.openPath!).existsSync())
@@ -6385,14 +6827,20 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
         .toList();
     if (files.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('مفيش ملفات مسمّاة لمشاركتها.')),
+        const SnackBar(content: Text('ظ…ظپظٹط´ ظ…ظ„ظپط§طھ ظ…ط³ظ…ظ‘ط§ط© ظ„ظ…ط´ط§ط±ظƒطھظ‡ط§.')),
       );
       return;
     }
-    await Share.shareXFiles(files, text: 'إيصالات الدفع (${files.length} ملف)');
+    if (!await confirmSend(context,
+        review: results.where((r) => !r.ok).length,
+        missing: missingMachines().length,
+        pending: results.where((r) => r.pending).length)) {
+      return;
+    }
+    await Share.shareXFiles(files, text: 'ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹ (${files.length} ظ…ظ„ظپ)');
   }
 
-  // صح = يفضل مع ملفات اليوم، غلط = يتشال من الإرسال والعد والفولدر. الضغط تاني بيلغي الاختيار
+  // طµط­ = ظٹظپط¶ظ„ ظ…ط¹ ظ…ظ„ظپط§طھ ط§ظ„ظٹظˆظ…طŒ ط؛ظ„ط· = ظٹطھط´ط§ظ„ ظ…ظ† ط§ظ„ط¥ط±ط³ط§ظ„ ظˆط§ظ„ط¹ط¯ ظˆط§ظ„ظپظˆظ„ط¯ط±. ط§ظ„ط¶ط؛ط· طھط§ظ†ظٹ ط¨ظٹظ„ط؛ظٹ ط§ظ„ط§ط®طھظٹط§ط±
   void setVerdict(MResult r, int v, {bool toggle = true}) {
     final nv = (toggle && r.verdict == v) ? 0 : v;
     final wasExcluded = r.excluded;
@@ -6400,13 +6848,13 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     final op = r.openPath;
     try {
       if (nv < 0 && !wasExcluded) {
-        // مسح النسخة المتسمية بس (مش الأصلي أبداً)
+        // ظ…ط³ط­ ط§ظ„ظ†ط³ط®ط© ط§ظ„ظ…طھط³ظ…ظٹط© ط¨ط³ (ظ…ط´ ط§ظ„ط£طµظ„ظٹ ط£ط¨ط¯ط§ظ‹)
         if (op != null && op != r.srcPath && op.startsWith(destDir)) File(op).deleteSync();
       } else if (nv >= 0 && wasExcluded && r.newName != null) {
         final src = File(r.srcPath);
         if (op != null && op != r.srcPath && src.existsSync()) {
           if (File(op).existsSync()) {
-            r.openPath = r.srcPath; // فيه ملف تاني واخد الاسم ده
+            r.openPath = r.srcPath; // ظپظٹظ‡ ظ…ظ„ظپ طھط§ظ†ظٹ ظˆط§ط®ط¯ ط§ظ„ط§ط³ظ… ط¯ظ‡
           } else {
             Directory(File(op).parent.path).createSync(recursive: true);
             src.copySync(op);
@@ -6416,11 +6864,11 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     } catch (_) {}
     saveMState(results);
     setState(() {});
-    // علّمته صح بس التطبيق مش عارف ماكينته: اسأل عليها وسمّيه وعدّه
+    // ط¹ظ„ظ‘ظ…طھظ‡ طµط­ ط¨ط³ ط§ظ„طھط·ط¨ظٹظ‚ ظ…ط´ ط¹ط§ط±ظپ ظ…ط§ظƒظٹظ†طھظ‡: ط§ط³ط£ظ„ ط¹ظ„ظٹظ‡ط§ ظˆط³ظ…ظ‘ظٹظ‡ ظˆط¹ط¯ظ‘ظ‡
     if (nv > 0 && r.newName == null && r.tidUsed == null && !busy) assignMachine(r);
   }
 
-  // تحديد الماكينة بإيدك لملف مش معروف: بيتسمّى وبيتعدّ وبيدخل في إيصالات اليوم
+  // طھط­ط¯ظٹط¯ ط§ظ„ظ…ط§ظƒظٹظ†ط© ط¨ط¥ظٹط¯ظƒ ظ„ظ…ظ„ظپ ظ…ط´ ظ…ط¹ط±ظˆظپ: ط¨ظٹطھط³ظ…ظ‘ظ‰ ظˆط¨ظٹطھط¹ط¯ظ‘ ظˆط¨ظٹط¯ط®ظ„ ظپظٹ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ظٹظˆظ…
   Future<void> assignMachine(MResult r) async {
     if (busy) return;
     int? guess = r.orderNum;
@@ -6431,11 +6879,11 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
-          title: const Text('ده إيصال أنهي ماكينة؟'),
+          title: const Text('ط¯ظ‡ ط¥ظٹطµط§ظ„ ط£ظ†ظ‡ظٹ ظ…ط§ظƒظٹظ†ط©طں'),
           content: DropdownButton<int>(
             isExpanded: true,
             value: sel,
-            hint: const Text('اختار الماكينة'),
+            hint: const Text('ط§ط®طھط§ط± ط§ظ„ظ…ط§ظƒظٹظ†ط©'),
             items: [
               for (final i in machineNums())
                 DropdownMenuItem(
@@ -6446,10 +6894,10 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
             onChanged: (v) => setS(() => sel = v),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ط¥ظ„ط؛ط§ط،')),
             FilledButton(
               onPressed: sel == null ? null : () => Navigator.pop(ctx, sel),
-              child: const Text('تمام'),
+              child: const Text('طھظ…ط§ظ…'),
             ),
           ],
         ),
@@ -6459,7 +6907,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     final tid = numToTid[picked];
     String? day = r.dayUsed, month = r.monthUsed;
     if (day == null || month == null) {
-      // التاريخ من اسم الملف (آخر شكل 7.11)، وإلا تاريخ النهاردة
+      // ط§ظ„طھط§ط±ظٹط® ظ…ظ† ط§ط³ظ… ط§ظ„ظ…ظ„ظپ (ط¢ط®ط± ط´ظƒظ„ 7.11)طŒ ظˆط¥ظ„ط§ طھط§ط±ظٹط® ط§ظ„ظ†ظ‡ط§ط±ط¯ط©
       final ms = RegExp(r'(\d{1,2})\.(\d{1,2})').allMatches(r.pdfName).toList();
       for (final m in ms.reversed) {
         final d = int.parse(m.group(1)!), mo = int.parse(m.group(2)!);
@@ -6477,16 +6925,16 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       await _applyName(r, srcF, tid, day, month);
     } catch (e) {
       r.idOk = false;
-      r.idNotes.add('فشل التسمية: ${e.toString().split('\n').first}');
+      r.idNotes.add('ظپط´ظ„ ط§ظ„طھط³ظ…ظٹط©: ${e.toString().split('\n').first}');
     }
     r.verdict = 1;
     r.cntNotes.clear();
-    r.count = -1; // يتعدّ من جديد
+    r.count = -1; // ظٹطھط¹ط¯ظ‘ ظ…ظ† ط¬ط¯ظٹط¯
     r.tries = 0;
     r.detail = '';
     saveMState(results);
     if (!mounted) return;
-    setState(() => status = 'اتسمّى ماكينة $picked. اضغط \"بدء العد\" لعدّ إيصالاته.');
+    setState(() => status = 'ط§طھط³ظ…ظ‘ظ‰ ظ…ط§ظƒظٹظ†ط© $picked. ط§ط¶ط؛ط· \"ط¨ط¯ط، ط§ظ„ط¹ط¯\" ظ„ط¹ط¯ظ‘ ط¥ظٹطµط§ظ„ط§طھظ‡.');
   }
 
   Future<void> markRestOk() async {
@@ -6495,11 +6943,11 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     final yes = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('الباقي صح'),
-        content: Text('هتعلّم ${list.length} ملف على إنهم صح؟'),
+        title: const Text('ط§ظ„ط¨ط§ظ‚ظٹ طµط­'),
+        content: Text('ظ‡طھط¹ظ„ظ‘ظ… ${list.length} ظ…ظ„ظپ ط¹ظ„ظ‰ ط¥ظ†ظ‡ظ… طµط­طں'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('لا')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تمام')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ظ„ط§')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('طھظ…ط§ظ…')),
         ],
       ),
     );
@@ -6515,7 +6963,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     final p = r.openPath;
     if (p == null || !File(p).existsSync()) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الملف مش موجود.')),
+        const SnackBar(content: Text('ط§ظ„ظ…ظ„ظپ ظ…ط´ ظ…ظˆط¬ظˆط¯.')),
       );
       return;
     }
@@ -6525,19 +6973,19 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
 
   Future<void> clearAll() async {
     if (results.isEmpty) {
-      setState(() => status = 'مفيش حاجة للمسح.');
+      setState(() => status = 'ظ…ظپظٹط´ ط­ط§ط¬ط© ظ„ظ„ظ…ط³ط­.');
       return;
     }
     final mine = results.where((r) => r.newName != null && r.openPath != null).toList();
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('مسح الكل'),
-        content: Text('هيتمسح ${mine.length} ملف مسمّى من:\n$destDir\n\n'
-            'وهتتمسح نتيجة الفحص. (ملفات واتساب الأصلية مش هتتمس)'),
+        title: const Text('ظ…ط³ط­ ط§ظ„ظƒظ„'),
+        content: Text('ظ‡ظٹطھظ…ط³ط­ ${mine.length} ظ…ظ„ظپ ظ…ط³ظ…ظ‘ظ‰ ظ…ظ†:\n$destDir\n\n'
+            'ظˆظ‡طھطھظ…ط³ط­ ظ†طھظٹط¬ط© ط§ظ„ظپط­طµ. (ظ…ظ„ظپط§طھ ظˆط§طھط³ط§ط¨ ط§ظ„ط£طµظ„ظٹط© ظ…ط´ ظ‡طھطھظ…ط³)'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('مسح')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ط¥ظ„ط؛ط§ط،')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('ظ…ط³ط­')),
         ],
       ),
     );
@@ -6556,15 +7004,15 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     }
     results.clear();
     saveMState(results);
-    setState(() => status = 'تم مسح $n ملف ونتيجة الفحص.');
+    setState(() => status = 'طھظ… ظ…ط³ط­ $n ظ…ظ„ظپ ظˆظ†طھظٹط¬ط© ط§ظ„ظپط­طµ.');
   }
 
-  // ───── التشغيل ─────
+  // â”€â”€â”€â”€â”€ ط§ظ„طھط´ط؛ظٹظ„ â”€â”€â”€â”€â”€
   Future<void> start({bool resumeOnly = false, bool count = false}) async {
     if (busy) return;
     final perm = await Permission.manageExternalStorage.request();
     if (!perm.isGranted) {
-      setState(() => status = 'لازم تسمح بالوصول لكل الملفات الأول.');
+      setState(() => status = 'ظ„ط§ط²ظ… طھط³ظ…ط­ ط¨ط§ظ„ظˆطµظˆظ„ ظ„ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ط£ظˆظ„.');
       return;
     }
     try {
@@ -6572,7 +7020,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     } catch (_) {}
     try {
       await _chan.invokeMethod(
-          'startKeepAlive', {'title': 'A2R POS', 'text': 'جاري فحص إيصالات الدفع...'});
+          'startKeepAlive', {'title': 'A2R POS', 'text': 'ط¬ط§ط±ظٹ ظپط­طµ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹...'});
     } catch (_) {}
     try {
       await _chan.invokeMethod('keepScreenOn', {'on': true});
@@ -6590,8 +7038,8 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
         final total = results.fold<int>(0, (a, r) => a + (r.count > 0 && !r.excluded ? r.count : 0));
         try {
           await _chan.invokeMethod('notify', {
-            'title': tr('A2R POS - انتهى فحص إيصالات الدفع'),
-            'text': tr('${results.length} ملف، $total إيصال')
+            'title': tr('A2R POS - ط§ظ†طھظ‡ظ‰ ظپط­طµ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹'),
+            'text': tr('${results.length} ظ…ظ„ظپطŒ $total ط¥ظٹطµط§ظ„')
           });
         } catch (_) {}
       }
@@ -6605,7 +7053,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       busy = true;
       stopReq = false;
       progressValue = 0;
-      status = 'جاري البحث عن ملفات PDF...';
+      status = 'ط¬ط§ط±ظٹ ط§ظ„ط¨ط­ط« ط¹ظ† ظ…ظ„ظپط§طھ PDF...';
     });
     try {
       Directory(destDir).createSync(recursive: true);
@@ -6614,7 +7062,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     final rec = TextRecognizer(script: TextRecognitionScript.latin);
     String? idle;
     try {
-      // المرحلة 1 (سريعة): تعريف الوحدة وتسمية كل الملفات
+      // ط§ظ„ظ…ط±ط­ظ„ط© 1 (ط³ط±ظٹط¹ط©): طھط¹ط±ظٹظپ ط§ظ„ظˆط­ط¯ط© ظˆطھط³ظ…ظٹط© ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ
       try {
         final lf = File('$baseDir/id_debug.txt');
         if (!resumeOnly && lf.existsSync() && lf.lengthSync() > 300000) lf.deleteSync();
@@ -6624,7 +7072,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       if (!resumeOnly) idle = await _identifyAll(rec, manualPaths: manualPaths);
       _dbg('PHASE1 done');
       if (mounted) setState(() => namingDone = true);
-      // المرحلة 2 (بطيئة): عدّ الإيصالات جوه كل ملف: مش بتشتغل غير لما تضغط "بدء العد"
+      // ط§ظ„ظ…ط±ط­ظ„ط© 2 (ط¨ط·ظٹط¦ط©): ط¹ط¯ظ‘ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ ط¬ظˆظ‡ ظƒظ„ ظ…ظ„ظپ: ظ…ط´ ط¨طھط´طھط؛ظ„ ط؛ظٹط± ظ„ظ…ط§ طھط¶ط؛ط· "ط¨ط¯ط، ط§ظ„ط¹ط¯"
       if (count) {
         _dbg('PHASE2 start');
         await _countAll(rec);
@@ -6647,20 +7095,20 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       busy = false;
       progressValue = 0;
       if (stopReq) {
-        status = 'اتوقف. فاضل $pend ملف لسه ما اتعدّش، اضغط "فحص" وهيكمّل من مكانه.';
+        status = 'ط§طھظˆظ‚ظپ. ظپط§ط¶ظ„ $pend ظ…ظ„ظپ ظ„ط³ظ‡ ظ…ط§ ط§طھط¹ط¯ظ‘ط´طŒ ط§ط¶ط؛ط· "ظپط­طµ" ظˆظ‡ظٹظƒظ…ظ‘ظ„ ظ…ظ† ظ…ظƒط§ظ†ظ‡.';
       } else if (results.isEmpty && idle != null) {
         status = idle;
       } else if (!count) {
-        status = 'تمت التسمية: ${results.length} ملف، $named اتسمّى واتنسخ.'
-            '${pend > 0 ? ' اضغط \"بدء العد\" لعدّ إيصالات $pend ملف.' : ''}';
+        status = 'طھظ…طھ ط§ظ„طھط³ظ…ظٹط©: ${results.length} ظ…ظ„ظپطŒ $named ط§طھط³ظ…ظ‘ظ‰ ظˆط§طھظ†ط³ط®.'
+            '${pend > 0 ? ' ط§ط¶ط؛ط· \"ط¨ط¯ط، ط§ظ„ط¹ط¯\" ظ„ط¹ط¯ظ‘ ط¥ظٹطµط§ظ„ط§طھ $pend ظ…ظ„ظپ.' : ''}';
       } else {
-        status = 'اكتمل العد: ${results.length} ملف، $named اتسمّى، إجمالي $total إيصال.'
-            '${pend > 0 ? ' (فاضل $pend لسه)' : ''}';
+        status = 'ط§ظƒطھظ…ظ„ ط§ظ„ط¹ط¯: ${results.length} ظ…ظ„ظپطŒ $named ط§طھط³ظ…ظ‘ظ‰طŒ ط¥ط¬ظ…ط§ظ„ظٹ $total ط¥ظٹطµط§ظ„.'
+            '${pend > 0 ? ' (ظپط§ط¶ظ„ $pend ظ„ط³ظ‡)' : ''}';
       }
     });
   }
 
-  // بيرجّع رسالة لو مفيش حاجة جديدة يفحصها
+  // ط¨ظٹط±ط¬ظ‘ط¹ ط±ط³ط§ظ„ط© ظ„ظˆ ظ…ظپظٹط´ ط­ط§ط¬ط© ط¬ط¯ظٹط¯ط© ظٹظپط­طµظ‡ط§
   Future<String?> _identifyAll(TextRecognizer rec, {List<String>? manualPaths}) async {
     final dirs = pdfDir != null ? [Directory(pdfDir!)] : findWhatsAppDocDirs();
     if (manualPaths != null) dirs.clear();
@@ -6673,33 +7121,33 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     final pdfs = <File>[];
     var skipped = 0;
     for (final d in dirs) {
-      if (d.path == destDir || d.path == defaultMDest) continue; // ناتج التطبيق نفسه
+      if (d.path == destDir || d.path == defaultMDest) continue; // ظ†ط§طھط¬ ط§ظ„طھط·ط¨ظٹظ‚ ظ†ظپط³ظ‡
       try {
         for (final e in d.listSync().whereType<File>()) {
           final n = baseName(e.path);
           final fd = fileDate(e);
           var isPdf = n.toLowerCase().trim().endsWith('.pdf');
           if (!isPdf && !fd.isBefore(cutoff) && !n.substring(n.lastIndexOf('.') + 1).contains(RegExp(r'[A-Za-z0-9]'))) {
-            isPdf = _hasPdfHeader(e); // ملفات واتساب DOC-... من غير امتداد
+            isPdf = _hasPdfHeader(e); // ظ…ظ„ظپط§طھ ظˆط§طھط³ط§ط¨ DOC-... ظ…ظ† ط؛ظٹط± ط§ظ…طھط¯ط§ط¯
           }
           if (!isPdf) {
-            if (!fd.isBefore(cutoff)) _dbg('SKIP(مش PDF) $n  size=${e.lengthSync()}');
+            if (!fd.isBefore(cutoff)) _dbg('SKIP(ظ…ط´ PDF) $n  size=${e.lengthSync()}');
             continue;
           }
-          // إخراج التقفيل بتاع التطبيق بس (الاسكندريه 5.11.pdf)، أي اسم تاني بيتفحص عادي
+          // ط¥ط®ط±ط§ط¬ ط§ظ„طھظ‚ظپظٹظ„ ط¨طھط§ط¹ ط§ظ„طھط·ط¨ظٹظ‚ ط¨ط³ (ظ†طھظٹط¬ط© 5.11.pdf)طŒ ط£ظٹ ط§ط³ظ… طھط§ظ†ظٹ ط¨ظٹطھظپط­طµ ط¹ط§ط¯ظٹ
           if (_isAppReportName(n)) {
-            _dbg('SKIP(تقرير التطبيق) $n');
+            _dbg('SKIP(طھظ‚ط±ظٹط± ط§ظ„طھط·ط¨ظٹظ‚) $n');
             continue;
           }
           if (fd.isBefore(cutoff)) {
             if (fd.isAfter(cutoff.subtract(const Duration(days: 14)))) {
-              _dbg('SKIP(أقدم من الفترة: $fd) $n');
+              _dbg('SKIP(ط£ظ‚ط¯ظ… ظ…ظ† ط§ظ„ظپطھط±ط©: $fd) $n');
             }
             continue;
           }
           if (have.contains('$n:${e.lengthSync()}') && skipDone) {
             skipped++;
-            _dbg('SKIP(اتفحص قبل كده) $n');
+            _dbg('SKIP(ط§طھظپط­طµ ظ‚ط¨ظ„ ظƒط¯ظ‡) $n');
             continue;
           }
           pdfs.add(e);
@@ -6709,13 +7157,13 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     pdfs.sort((a, b) => baseName(a.path).compareTo(baseName(b.path)));
     if (manualPaths != null) pdfs.addAll(manualPaths.map((p) => File(p)));
     if (pdfs.isEmpty) {
-      if (dirs.isEmpty) return 'مش لاقي فولدر مستندات واتساب. اختار فولدر بإيدك.';
+      if (dirs.isEmpty) return 'ظ…ط´ ظ„ط§ظ‚ظٹ ظپظˆظ„ط¯ط± ظ…ط³طھظ†ط¯ط§طھ ظˆط§طھط³ط§ط¨. ط§ط®طھط§ط± ظپظˆظ„ط¯ط± ط¨ط¥ظٹط¯ظƒ.';
       return skipped > 0
-          ? 'كل الملفات في الفترة دي اتفحصت قبل كده ($skipped ملف).'
-          : 'مفيش ملفات PDF في الفترة دي.';
+          ? 'ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ ظپظٹ ط§ظ„ظپطھط±ط© ط¯ظٹ ط§طھظپط­طµطھ ظ‚ط¨ظ„ ظƒط¯ظ‡ ($skipped ظ…ظ„ظپ).'
+          : 'ظ…ظپظٹط´ ظ…ظ„ظپط§طھ PDF ظپظٹ ط§ظ„ظپطھط±ط© ط¯ظٹ.';
     }
-    // امسح كل النتايج/النسخ القديمة للملفات اللي هنفحصها دلوقتي *قبل* التسمية،
-    // علشان أسماء قديمة متعملش تضارب وتطلّع "_2" من غير ما يكون فيه ملف مكرر.
+    // ط§ظ…ط³ط­ ظƒظ„ ط§ظ„ظ†طھط§ظٹط¬/ط§ظ„ظ†ط³ط® ط§ظ„ظ‚ط¯ظٹظ…ط© ظ„ظ„ظ…ظ„ظپط§طھ ط§ظ„ظ„ظٹ ظ‡ظ†ظپط­طµظ‡ط§ ط¯ظ„ظˆظ‚طھظٹ *ظ‚ط¨ظ„* ط§ظ„طھط³ظ…ظٹط©طŒ
+    // ط¹ظ„ط´ط§ظ† ط£ط³ظ…ط§ط، ظ‚ط¯ظٹظ…ط© ظ…طھط¹ظ…ظ„ط´ طھط¶ط§ط±ط¨ ظˆطھط·ظ„ظ‘ط¹ "_2" ظ…ظ† ط؛ظٹط± ظ…ط§ ظٹظƒظˆظ† ظپظٹظ‡ ظ…ظ„ظپ ظ…ظƒط±ط±.
     for (final pf in pdfs) {
       final pn = baseName(pf.path);
       final ps = pf.lengthSync();
@@ -6734,7 +7182,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       final f = pdfs[i];
       final name = baseName(f.path);
       final size = f.lengthSync();
-      // لو الملف ده اتفحص قبل كده وإحنا بنعيد: امسح الإدخال القديم ونسخته
+      // ظ„ظˆ ط§ظ„ظ…ظ„ظپ ط¯ظ‡ ط§طھظپط­طµ ظ‚ط¨ظ„ ظƒط¯ظ‡ ظˆط¥ط­ظ†ط§ ط¨ظ†ط¹ظٹط¯: ط§ظ…ط³ط­ ط§ظ„ط¥ط¯ط®ط§ظ„ ط§ظ„ظ‚ط¯ظٹظ… ظˆظ†ط³ط®طھظ‡
       for (final o in results.where((x) => x.key == '$name:$size').toList()) {
         try {
           if (o.newName != null && o.openPath != null) File(o.openPath!).deleteSync();
@@ -6745,14 +7193,14 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       final r = MResult(name)
         ..srcPath = f.path
         ..size = size;
-      setState(() => status = 'تعريف الملفات ${i + 1} / ${pdfs.length}: $name');
+      setState(() => status = 'طھط¹ط±ظٹظپ ط§ظ„ظ…ظ„ظپط§طھ ${i + 1} / ${pdfs.length}: $name');
       try {
         await _identifyOne(r, f, rec);
       } catch (e, st) {
         r.idOk = false;
-        r.idNotes.add('فشل التعريف: ${e.toString().split('\n').first}');
+        r.idNotes.add('ظپط´ظ„ ط§ظ„طھط¹ط±ظٹظپ: ${e.toString().split('\n').first}');
         final ss = st.toString();
-        _dbg('ERROR(تعريف) $name size=$size: $e\n${ss.substring(0, ss.length > 600 ? 600 : ss.length)}');
+        _dbg('ERROR(طھط¹ط±ظٹظپ) $name size=$size: $e\n${ss.substring(0, ss.length > 600 ? 600 : ss.length)}');
       }
       r.openPath ??= f.path;
       results.add(r);
@@ -6770,14 +7218,14 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     return null;
   }
 
-  // قراءة صفحات الـ PDF (لحد 6) وتصويت على Terminal ID، وبعدين مطابقتها باسم الملف الأصلي
+  // ظ‚ط±ط§ط،ط© طµظپط­ط§طھ ط§ظ„ظ€ PDF (ظ„ط­ط¯ 6) ظˆطھطµظˆظٹطھ ط¹ظ„ظ‰ Terminal IDطŒ ظˆط¨ط¹ط¯ظٹظ† ظ…ط·ط§ط¨ظ‚طھظ‡ط§ ط¨ط§ط³ظ… ط§ظ„ظ…ظ„ظپ ط§ظ„ط£طµظ„ظٹ
   Future<void> _identifyOne(MResult r, File f, TextRecognizer rec) async {
     final bytes = await f.readAsBytes();
     final sb = StringBuffer();
     final votes = <String, double>{};
     var id = MIdent();
     for (var pi = 0; pi < 25; pi++) {
-      // بعد 6 صفحات لو لقينا ماكينة نوقف، ولو لسه مفيش نكمّل لحد 25 صفحة
+      // ط¨ط¹ط¯ 6 طµظپط­ط§طھ ظ„ظˆ ظ„ظ‚ظٹظ†ط§ ظ…ط§ظƒظٹظ†ط© ظ†ظˆظ‚ظپطŒ ظˆظ„ظˆ ظ„ط³ظ‡ ظ…ظپظٹط´ ظ†ظƒظ…ظ‘ظ„ ظ„ط­ط¯ 25 طµظپط­ط©
       if (pi >= 6 && votes.isNotEmpty) break;
       var got = false;
       try {
@@ -6797,12 +7245,12 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
           } catch (_) {}
         }
       } catch (e) {
-        if (!_pageEnd(e) || pi == 0) rethrow; // آخر صفحة عدّت = مش خطأ
+        if (!_pageEnd(e) || pi == 0) rethrow; // ط¢ط®ط± طµظپط­ط© ط¹ط¯ظ‘طھ = ظ…ط´ ط®ط·ط£
       }
       if (!got) break;
       id = _identify(sb.toString());
       final rk = _rankVotes(votes);
-      // وقف بدري لو الماكينة واضحة (Terminal ID مقروء بوضوح) واليوم معروف
+      // ظˆظ‚ظپ ط¨ط¯ط±ظٹ ظ„ظˆ ط§ظ„ظ…ط§ظƒظٹظ†ط© ظˆط§ط¶ط­ط© (Terminal ID ظ…ظ‚ط±ظˆط، ط¨ظˆط¶ظˆط­) ظˆط§ظ„ظٹظˆظ… ظ…ط¹ط±ظˆظپ
       if (id.day != null &&
           rk.isNotEmpty &&
           rk.first.value >= 3 &&
@@ -6816,8 +7264,8 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     var tid = rk.isNotEmpty ? rk.first.key : id.tid;
     var fromUnit = false;
     if (tid == null) {
-      // مفيش Terminal ID مقروء: نحدد الوحدة من Merchant ID/اسم الوحدة جوه الـ PDF،
-      // ولو الوحدة فيها ماكينة واحدة بس نستخدمها (وتتعلّم للمراجعة)
+      // ظ…ظپظٹط´ Terminal ID ظ…ظ‚ط±ظˆط،: ظ†ط­ط¯ط¯ ط§ظ„ظˆط­ط¯ط© ظ…ظ† Merchant ID/ط§ط³ظ… ط§ظ„ظˆط­ط¯ط© ط¬ظˆظ‡ ط§ظ„ظ€ PDFطŒ
+      // ظˆظ„ظˆ ط§ظ„ظˆط­ط¯ط© ظپظٹظ‡ط§ ظ…ط§ظƒظٹظ†ط© ظˆط§ط­ط¯ط© ط¨ط³ ظ†ط³طھط®ط¯ظ…ظ‡ط§ (ظˆطھطھط¹ظ„ظ‘ظ… ظ„ظ„ظ…ط±ط§ط¬ط¹ط©)
       final row = findUnitExtraIn([sb.toString()]);
       if (row != null) {
         final same = terminals.entries.where((e) => e.value.excelRow == row).toList();
@@ -6839,7 +7287,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     final weak = tid != null &&
         ((!fromUnit && top < 2) || !_plausibleDay(id.day, id.month));
     if (weak) {
-      // مش واضح إنه إيصال ماكينة (توكيل / ملف تاني): تحت المراجعة، من غير تسمية ولا عد
+      // ظ…ط´ ظˆط§ط¶ط­ ط¥ظ†ظ‡ ط¥ظٹطµط§ظ„ ظ…ط§ظƒظٹظ†ط© (طھظˆظƒظٹظ„ / ظ…ظ„ظپ طھط§ظ†ظٹ): طھط­طھ ط§ظ„ظ…ط±ط§ط¬ط¹ط©طŒ ظ…ظ† ط؛ظٹط± طھط³ظ…ظٹط© ظˆظ„ط§ ط¹ط¯
       r.tidUsed = null;
       r.newName = null;
       if (id.day != null && id.month != null) {
@@ -6847,20 +7295,20 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
         r.monthUsed = id.month;
       }
       r.idOk = false;
-      r.idNotes.add('الملف ده مش واضح إنه إيصال ماكينة (قراءة ضعيفة للـ Terminal ID)، راجعه');
+      r.idNotes.add('ط§ظ„ظ…ظ„ظپ ط¯ظ‡ ظ…ط´ ظˆط§ط¶ط­ ط¥ظ†ظ‡ ط¥ظٹطµط§ظ„ ظ…ط§ظƒظٹظ†ط© (ظ‚ط±ط§ط،ط© ط¶ط¹ظٹظپط© ظ„ظ„ظ€ Terminal ID)طŒ ط±ط§ط¬ط¹ظ‡');
       r.count = 0;
       r.cntOk = true;
-      r.detail = 'للمراجعة (مش معدود)';
+      r.detail = 'ظ„ظ„ظ…ط±ط§ط¬ط¹ط© (ظ…ط´ ظ…ط¹ط¯ظˆط¯)';
       return;
     }
     await _applyName(r, f, tid, id.day, id.month);
     if (fromUnit && r.newName != null) {
       r.idOk = false;
-      r.idNotes.add('Terminal ID مش واضح، الوحدة اتحددت من Merchant ID/الاسم جوه الـ PDF، راجع');
+      r.idNotes.add('Terminal ID ظ…ط´ ظˆط§ط¶ط­طŒ ط§ظ„ظˆط­ط¯ط© ط§طھط­ط¯ط¯طھ ظ…ظ† Merchant ID/ط§ظ„ط§ط³ظ… ط¬ظˆظ‡ ط§ظ„ظ€ PDFطŒ ط±ط§ط¬ط¹');
     }
   }
 
-  // لو ملفين اتعرفوا على نفس الماكينة: الأقوى (أكتر أصوات) يفضل، والتاني ياخد مرشحه التاني لو قراءته واضحة
+  // ظ„ظˆ ظ…ظ„ظپظٹظ† ط§طھط¹ط±ظپظˆط§ ط¹ظ„ظ‰ ظ†ظپط³ ط§ظ„ظ…ط§ظƒظٹظ†ط©: ط§ظ„ط£ظ‚ظˆظ‰ (ط£ظƒطھط± ط£طµظˆط§طھ) ظٹظپط¶ظ„طŒ ظˆط§ظ„طھط§ظ†ظٹ ظٹط§ط®ط¯ ظ…ط±ط´ط­ظ‡ ط§ظ„طھط§ظ†ظٹ ظ„ظˆ ظ‚ط±ط§ط،طھظ‡ ظˆط§ط¶ط­ط©
   Future<void> _resolveDuplicates() async {
     final groups = <String, List<MResult>>{};
     for (final r in results) {
@@ -6888,15 +7336,15 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
         await _applyName(r, File(r.srcPath), alt, r.dayUsed, r.monthUsed);
         if (r.newName != null) {
           r.idOk = false;
-          r.idNotes.add('الـ PDF اتعرّف على نفس ماكينة ملف تاني، اتسمّى ماكينة ${terminals[alt]!.orderNum} (المرشح التاني من قراءة الـ PDF)، راجع');
+          r.idNotes.add('ط§ظ„ظ€ PDF ط§طھط¹ط±ظ‘ظپ ط¹ظ„ظ‰ ظ†ظپط³ ظ…ط§ظƒظٹظ†ط© ظ…ظ„ظپ طھط§ظ†ظٹطŒ ط§طھط³ظ…ظ‘ظ‰ ظ…ط§ظƒظٹظ†ط© ${terminals[alt]!.orderNum} (ط§ظ„ظ…ط±ط´ط­ ط§ظ„طھط§ظ†ظٹ ظ…ظ† ظ‚ط±ط§ط،ط© ط§ظ„ظ€ PDF)طŒ ط±ط§ط¬ط¹');
         }
       }
     }
   }
 
-  // بيعلّم الملفات اللي لسه واخدة نفس الماكينة (مفيش حل تلقائي)
+  // ط¨ظٹط¹ظ„ظ‘ظ… ط§ظ„ظ…ظ„ظپط§طھ ط§ظ„ظ„ظٹ ظ„ط³ظ‡ ظˆط§ط®ط¯ط© ظ†ظپط³ ط§ظ„ظ…ط§ظƒظٹظ†ط© (ظ…ظپظٹط´ ط­ظ„ طھظ„ظ‚ط§ط¦ظٹ)
   void _flagDuplicates() {
-    const tag = 'نفس الماكينة';
+    const tag = 'ظ†ظپط³ ط§ظ„ظ…ط§ظƒظٹظ†ط©';
     for (final r in results) {
       final had = r.idNotes.any((n) => n.startsWith(tag));
       r.idNotes.removeWhere((n) => n.startsWith(tag));
@@ -6912,9 +7360,9 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       if (e.value.length < 2) continue;
       final info = terminals[e.key];
       for (final r in e.value) {
-        final others = e.value.where((x) => !identical(x, r)).map((x) => x.pdfName).join(' ، ');
+        final others = e.value.where((x) => !identical(x, r)).map((x) => x.pdfName).join(' طŒ ');
         r.idOk = false;
-        r.idNotes.add('$tag (${info?.orderNum ?? ''} ${info?.unitName ?? ''}) اتعرفت كمان في: $others — راجع');
+        r.idNotes.add('$tag (${info?.orderNum ?? ''} ${info?.unitName ?? ''}) ط§طھط¹ط±ظپطھ ظƒظ…ط§ظ† ظپظٹ: $others â€” ط±ط§ط¬ط¹');
       }
     }
   }
@@ -6922,7 +7370,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   Future<void> _applyName(MResult r, File f, String? tid, String? day, String? month) async {
     r.idOk = true;
     r.idNotes.clear();
-    // نسخة قديمة متسمية للملف ده: نمسحها قبل ما نسمّي من جديد
+    // ظ†ط³ط®ط© ظ‚ط¯ظٹظ…ط© ظ…طھط³ظ…ظٹط© ظ„ظ„ظ…ظ„ظپ ط¯ظ‡: ظ†ظ…ط³ط­ظ‡ط§ ظ‚ط¨ظ„ ظ…ط§ ظ†ط³ظ…ظ‘ظٹ ظ…ظ† ط¬ط¯ظٹط¯
     if (r.newName != null &&
         r.openPath != null &&
         r.openPath != r.srcPath &&
@@ -6936,21 +7384,21 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     r.tidUsed = tid;
     if (tid == null || !terminals.containsKey(tid)) {
       r.idOk = false;
-      r.idNotes.add('مش قادر أعرف الماكينة من الـ PDF');
+      r.idNotes.add('ظ…ط´ ظ‚ط§ط¯ط± ط£ط¹ط±ظپ ط§ظ„ظ…ط§ظƒظٹظ†ط© ظ…ظ† ط§ظ„ظ€ PDF');
       return;
     }
     final info = terminals[tid]!;
     r.orderNum = info.orderNum;
     if (day == null || month == null) {
       r.idOk = false;
-      r.idNotes.add('مش قادر أعرف التاريخ من الـ PDF');
+      r.idNotes.add('ظ…ط´ ظ‚ط§ط¯ط± ط£ط¹ط±ظپ ط§ظ„طھط§ط±ظٹط® ظ…ظ† ط§ظ„ظ€ PDF');
       return;
     }
     r.dayUsed = day;
     r.monthUsed = month;
     final name = machineNewName(info, day, month);
     var final0 = name;
-    // "_2" بس لو فعلاً ملف تاني (من نفس الفحص) واخد نفس الاسم؛ أي ملف قديم في الفولدر بنكتب فوقه
+    // "_2" ط¨ط³ ظ„ظˆ ظپط¹ظ„ط§ظ‹ ظ…ظ„ظپ طھط§ظ†ظٹ (ظ…ظ† ظ†ظپط³ ط§ظ„ظپط­طµ) ظˆط§ط®ط¯ ظ†ظپط³ ط§ظ„ط§ط³ظ…ط› ط£ظٹ ظ…ظ„ظپ ظ‚ط¯ظٹظ… ظپظٹ ط§ظ„ظپظˆظ„ط¯ط± ط¨ظ†ظƒطھط¨ ظپظˆظ‚ظ‡
     var k = 2;
     while (results.any((x) => x != r && !x.excluded && x.newName == final0)) {
       final0 = '${name}_$k';
@@ -6969,23 +7417,23 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   }
 
   Future<void> _countAll(TextRecognizer rec) async {
-    // ملف التطبيق اتقفل أثناء عدّه 3 مرات: نعدّيه بدل ما نلف في دايرة
+    // ظ…ظ„ظپ ط§ظ„طھط·ط¨ظٹظ‚ ط§طھظ‚ظپظ„ ط£ط«ظ†ط§ط، ط¹ط¯ظ‘ظ‡ 3 ظ…ط±ط§طھ: ظ†ط¹ط¯ظ‘ظٹظ‡ ط¨ط¯ظ„ ظ…ط§ ظ†ظ„ظپ ظپظٹ ط¯ط§ظٹط±ط©
     for (final r in results) {
       if (r.pending && r.tries >= 3) {
         r.count = 0;
         r.cntOk = false;
-        r.cntNotes.add('العد وقف أكتر من مرة (التطبيق اتقفل). من ⋮ اختار إعادة العد');
+        r.cntNotes.add('ط§ظ„ط¹ط¯ ظˆظ‚ظپ ط£ظƒطھط± ظ…ظ† ظ…ط±ط© (ط§ظ„طھط·ط¨ظٹظ‚ ط§طھظ‚ظپظ„). ظ…ظ† â‹® ط§ط®طھط§ط± ط¥ط¹ط§ط¯ط© ط§ظ„ط¹ط¯');
       }
     }
     final todo = results.where((r) => r.pending).toList();
     for (var i = 0; i < todo.length; i++) {
       if (stopReq) break;
       final r = todo[i];
-      if (r.excluded) continue; // اتعلّم غلط وإحنا بنعد
+      if (r.excluded) continue; // ط§طھط¹ظ„ظ‘ظ… ط؛ظ„ط· ظˆط¥ط­ظ†ط§ ط¨ظ†ط¹ط¯
       r.tries++;
       saveMState(results);
       setState(() {
-        status = 'عدّ الإيصالات ${i + 1} / ${todo.length}: ${r.newName ?? r.pdfName}';
+        status = 'ط¹ط¯ظ‘ ط§ظ„ط¥ظٹطµط§ظ„ط§طھ ${i + 1} / ${todo.length}: ${r.newName ?? r.pdfName}';
         progressValue = i / todo.length;
       });
       try {
@@ -6993,7 +7441,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       } catch (_) {
         r.count = 0;
         r.cntOk = false;
-        r.cntNotes.add('فشل العد');
+        r.cntNotes.add('ظپط´ظ„ ط§ظ„ط¹ط¯');
       }
       r.tries = 0;
       saveMState(results);
@@ -7004,7 +7452,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   }
 
 
-  // العد السريع: بيقرا صورة كل صفحة مرة واحدة من غير تحويل PNG ولا شرائح. بيرجّع false لو الملف مش ممسوح
+  // ط§ظ„ط¹ط¯ ط§ظ„ط³ط±ظٹط¹: ط¨ظٹظ‚ط±ط§ طµظˆط±ط© ظƒظ„ طµظپط­ط© ظ…ط±ط© ظˆط§ط­ط¯ط© ظ…ظ† ط؛ظٹط± طھط­ظˆظٹظ„ PNG ظˆظ„ط§ ط´ط±ط§ط¦ط­. ط¨ظٹط±ط¬ظ‘ط¹ false ظ„ظˆ ط§ظ„ظ…ظ„ظپ ظ…ط´ ظ…ظ…ط³ظˆط­
   Future<bool> _countOneFast(MResult r, TextRecognizer rec, Uint8List bytes, File src) async {
     final ranges = _pdfJpegRanges(bytes);
     if (ranges.isEmpty) return false;
@@ -7022,7 +7470,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
         total += sp.sm;
         totalMx += sp.mx;
         if (sp.sm == 0) empty.add(i + 1);
-        if (sp.sm != sp.mx) diff.add('${i + 1} (${sp.sm} أو ${sp.mx})');
+        if ((sp.sm - sp.mx).abs() >= 2) diff.add('${i + 1} (${sp.sm} ط£ظˆ ${sp.mx})');
         col.pageH = sp.h;
         col.pages.add(<Anchor>[]);
         _collect(res, 0, 1, col);
@@ -7034,42 +7482,41 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       } catch (_) {}
       await Future.delayed(const Duration(milliseconds: 30));
     }
-    _dbg('FAST ${r.pdfName}: ${ranges.length} صفحة، ${sw.elapsedMilliseconds ~/ 1000}ث، عدد $total (بالطريقة التانية $totalMx)، فشل $failed');
-    if (total == 0 || failed == ranges.length) return false; // نرجع للطريقة القديمة
+    _dbg('FAST ${r.pdfName}: ${ranges.length} طµظپط­ط©طŒ ${sw.elapsedMilliseconds ~/ 1000}ط«طŒ ط¹ط¯ط¯ $total (ط¨ط§ظ„ط·ط±ظٹظ‚ط© ط§ظ„طھط§ظ†ظٹط© $totalMx)طŒ ظپط´ظ„ $failed');
+    if (total == 0 || failed == ranges.length) return false; // ظ†ط±ط¬ط¹ ظ„ظ„ط·ط±ظٹظ‚ط© ط§ظ„ظ‚ط¯ظٹظ…ط©
     final sc = col.finish();
     r.count = total;
-    r.detail = 'عدّ سريع • ${ranges.length} صفحة • RRN مقروء ${sc.full}${sc.rangeText}';
+    r.detail = 'ط¹ط¯ظ‘ ط³ط±ظٹط¹ â€¢ ${ranges.length} طµظپط­ط© â€¢ RRN ظ…ظ‚ط±ظˆط، ${sc.full}${sc.rangeText}';
     if (failed > 0) {
       r.cntOk = false;
-      r.cntNotes.add('$failed صفحة فشلت قراءتها، العدد ممكن يكون ناقص');
+      r.cntNotes.add('$failed طµظپط­ط© ظپط´ظ„طھ ظ‚ط±ط§ط،طھظ‡ط§طŒ ط§ظ„ط¹ط¯ط¯ ظ…ظ…ظƒظ† ظٹظƒظˆظ† ظ†ط§ظ‚طµ');
     }
     if (empty.isNotEmpty) {
-      r.cntNotes.add('صفحات ما لقيتش فيها إيصالات: ${empty.join('، ')}');
+      r.cntNotes.add('طµظپط­ط§طھ ظ…ط§ ظ„ظ‚ظٹطھط´ ظپظٹظ‡ط§ ط¥ظٹطµط§ظ„ط§طھ: ${empty.join('طŒ ')}');
     }
     if (diff.isNotEmpty) {
-      r.cntNotes.add('صفحات الطريقتين اختلفوا فيها: ${diff.join('، ')} (راجعها لو العدد مهم)');
-      if ((total - totalMx).abs() > 3) r.cntOk = false;
+      r.cntNotes.add('طµظپط­ط§طھ ط§ظ„ط·ط±ظٹظ‚طھظٹظ† ط§ط®طھظ„ظپظˆط§ ظپظٹظ‡ط§: ${diff.join('طŒ ')} (ط±ط§ط¬ط¹ظ‡ط§ ظ„ظˆ ط§ظ„ط¹ط¯ط¯ ظ…ظ‡ظ…)');
     }
-    // نقارن بتسلسل الـ RRN بس لو الأرقام اتقرت كفاية
+    // ظ†ظ‚ط§ط±ظ† ط¨طھط³ظ„ط³ظ„ ط§ظ„ظ€ RRN ط¨ط³ ظ„ظˆ ط§ظ„ط£ط±ظ‚ط§ظ… ط§طھظ‚ط±طھ ظƒظپط§ظٹط©
     if (sc.rangeLen != null && sc.full >= total * 0.8 && total != sc.rangeLen) {
       r.cntOk = false;
-      final miss = sc.seqMissing.take(10).map((n) => n.toString().padLeft(6, '0')).join('، ');
-      r.cntNotes.add('العدد $total بس التسلسل ${sc.rangeLen}'
-          '${sc.seqMissing.isNotEmpty ? ' - أرقام مش لاقيها: $miss${sc.seqMissing.length > 10 ? ' ...' : ''}' : ''}');
+      final miss = sc.seqMissing.take(10).map((n) => n.toString().padLeft(6, '0')).join('طŒ ');
+      r.cntNotes.add('ط§ظ„ط¹ط¯ط¯ $total ط¨ط³ ط§ظ„طھط³ظ„ط³ظ„ ${sc.rangeLen}'
+          '${sc.seqMissing.isNotEmpty ? ' - ط£ط±ظ‚ط§ظ… ظ…ط´ ظ„ط§ظ‚ظٹظ‡ط§: $miss${sc.seqMissing.length > 10 ? ' ...' : ''}' : ''}');
     }
-    if (sc.otherDay.isNotEmpty) {
+    if (sc.otherDay.length >= 3 && sc.otherDay.length >= total * 0.1) {
       r.cntOk = false;
-      r.cntNotes.add('مش تبع نفس اليوم: ${sc.otherDay.join(' ، ')}');
+      r.cntNotes.add('ظ…ط´ طھط¨ط¹ ظ†ظپط³ ط§ظ„ظٹظˆظ…: ${sc.otherDay.take(5).join(' طŒ ')}');
     }
     if (sc.nonPayment) {
-      r.cntNotes.add('فيه إيصال إقفال/ملخص/إعادة طباعة (اتجاهل ومش معدود)');
+      r.cntNotes.add('ظپظٹظ‡ ط¥ظٹطµط§ظ„ ط¥ظ‚ظپط§ظ„/ظ…ظ„ط®طµ/ط¥ط¹ط§ط¯ط© ط·ط¨ط§ط¹ط© (ط§طھط¬ط§ظ‡ظ„ ظˆظ…ط´ ظ…ط¹ط¯ظˆط¯)');
     }
     if (r.newName == null && sc.tid != null) {
       await _applyName(r, src, sc.tid, sc.day, sc.month);
     } else if (sc.tid != null && terminals[sc.tid] != null && r.orderNum != null &&
         terminals[sc.tid]!.orderNum != r.orderNum) {
       r.cntOk = false;
-      r.cntNotes.add('العد لقى ماكينة ${terminals[sc.tid]!.orderNum} بس التسمية ماكينة ${r.orderNum}، راجع');
+      r.cntNotes.add('ط§ظ„ط¹ط¯ ظ„ظ‚ظ‰ ظ…ط§ظƒظٹظ†ط© ${terminals[sc.tid]!.orderNum} ط¨ط³ ط§ظ„طھط³ظ…ظٹط© ظ…ط§ظƒظٹظ†ط© ${r.orderNum}طŒ ط±ط§ط¬ط¹');
     }
     return true;
   }
@@ -7086,7 +7533,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     if (src == null) {
       r.count = 0;
       r.cntOk = false;
-      r.cntNotes.add('الملف الأصلي مش موجود');
+      r.cntNotes.add('ط§ظ„ظ…ظ„ظپ ط§ظ„ط£طµظ„ظٹ ظ…ط´ ظ…ظˆط¬ظˆط¯');
       return;
     }
     final bytes = await src.readAsBytes();
@@ -7094,7 +7541,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       try {
         if (await _countOneFast(r, rec, bytes, src)) return;
       } catch (e) {
-        _dbg('FAST فشل وهنكمل بالطريقة الدقيقة: $e');
+        _dbg('FAST ظپط´ظ„ ظˆظ‡ظ†ظƒظ…ظ„ ط¨ط§ظ„ط·ط±ظٹظ‚ط© ط§ظ„ط¯ظ‚ظٹظ‚ط©: $e');
       }
       r.cntNotes.clear();
       r.cntOk = true;
@@ -7104,8 +7551,8 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     _tmOcr = 0;
     var nPages = 0, tRaster = 0;
     final swAll = Stopwatch()..start();
-    double? dpiCache; // مقاس الصفحات في الملف الممسوح واحد: نقيس مرة بس
-    // صفحة صفحة (مش الملف كله مرة واحدة) علشان الذاكرة ما تخلصش والتطبيق ما يقفلش
+    double? dpiCache; // ظ…ظ‚ط§ط³ ط§ظ„طµظپط­ط§طھ ظپظٹ ط§ظ„ظ…ظ„ظپ ط§ظ„ظ…ظ…ط³ظˆط­ ظˆط§ط­ط¯: ظ†ظ‚ظٹط³ ظ…ط±ط© ط¨ط³
+    // طµظپط­ط© طµظپط­ط© (ظ…ط´ ط§ظ„ظ…ظ„ظپ ظƒظ„ظ‡ ظ…ط±ط© ظˆط§ط­ط¯ط©) ط¹ظ„ط´ط§ظ† ط§ظ„ط°ط§ظƒط±ط© ظ…ط§ طھط®ظ„طµط´ ظˆط§ظ„طھط·ط¨ظٹظ‚ ظ…ط§ ظٹظ‚ظپظ„ط´
     for (var pg = 1; pg <= 400; pg++) {
       var got = false;
       try {
@@ -7129,29 +7576,29 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       if (!got) break;
       await Future.delayed(const Duration(milliseconds: 40));
     }
-    _dbg('PAGES ${r.pdfName}: $nPages صفحة، المجموع ${swAll.elapsedMilliseconds ~/ 1000}ث '
-        '(raster+png ${tRaster ~/ 1000}ث، شرائح ${_tmStrips ~/ 1000}ث، OCR ${_tmOcr ~/ 1000}ث)');
+    _dbg('PAGES ${r.pdfName}: $nPages طµظپط­ط©طŒ ط§ظ„ظ…ط¬ظ…ظˆط¹ ${swAll.elapsedMilliseconds ~/ 1000}ط« '
+        '(raster+png ${tRaster ~/ 1000}ط«طŒ ط´ط±ط§ط¦ط­ ${_tmStrips ~/ 1000}ط«طŒ OCR ${_tmOcr ~/ 1000}ط«)');
     final sc = col.finish();
     r.count = sc.count;
-    r.detail = 'RRN كامل ${sc.full} • ناقص القراءة ${sc.partial}${sc.rangeText}';
+    r.detail = 'RRN ظƒط§ظ…ظ„ ${sc.full} â€¢ ظ†ط§ظ‚طµ ط§ظ„ظ‚ط±ط§ط،ط© ${sc.partial}${sc.rangeText}';
     if (!sc.agree) {
       r.cntOk = false;
       r.cntNotes.add(sc.seqNote);
     }
     if (sc.otherDay.isNotEmpty) {
       r.cntOk = false;
-      r.cntNotes.add('مش تبع نفس اليوم: ${sc.otherDay.join(' ، ')}');
+      r.cntNotes.add('ظ…ط´ طھط¨ط¹ ظ†ظپط³ ط§ظ„ظٹظˆظ…: ${sc.otherDay.join(' طŒ ')}');
     }
     if (sc.nonPayment) {
-      r.cntNotes.add('فيه إيصال إقفال/ملخص/إعادة طباعة (اتجاهل ومش معدود)');
+      r.cntNotes.add('ظپظٹظ‡ ط¥ظٹطµط§ظ„ ط¥ظ‚ظپط§ظ„/ظ…ظ„ط®طµ/ط¥ط¹ط§ط¯ط© ط·ط¨ط§ط¹ط© (ط§طھط¬ط§ظ‡ظ„ ظˆظ…ط´ ظ…ط¹ط¯ظˆط¯)');
     }
     if (r.newName == null && sc.tid != null) {
-      // التعريف السريع فشل: نسمّي من نتيجة العد الكاملة
+      // ط§ظ„طھط¹ط±ظٹظپ ط§ظ„ط³ط±ظٹط¹ ظپط´ظ„: ظ†ط³ظ…ظ‘ظٹ ظ…ظ† ظ†طھظٹط¬ط© ط§ظ„ط¹ط¯ ط§ظ„ظƒط§ظ…ظ„ط©
       await _applyName(r, src, sc.tid, sc.day, sc.month);
     } else if (sc.tid != null && terminals[sc.tid] != null && r.orderNum != null &&
         terminals[sc.tid]!.orderNum != r.orderNum) {
       r.cntOk = false;
-      r.cntNotes.add('العد لقى ماكينة ${terminals[sc.tid]!.orderNum} بس التسمية ماكينة ${r.orderNum}، راجع');
+      r.cntNotes.add('ط§ظ„ط¹ط¯ ظ„ظ‚ظ‰ ظ…ط§ظƒظٹظ†ط© ${terminals[sc.tid]!.orderNum} ط¨ط³ ط§ظ„طھط³ظ…ظٹط© ظ…ط§ظƒظٹظ†ط© ${r.orderNum}طŒ ط±ط§ط¬ط¹');
     }
   }
 
@@ -7159,7 +7606,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     r.count = -1;
     r.tries = 0;
     saveMState(results);
-    if (mounted) setState(() => status = 'اتعلّم للعد. اضغط \"بدء العد\".');
+    if (mounted) setState(() => status = 'ط§طھط¹ظ„ظ‘ظ… ظ„ظ„ط¹ط¯. ط§ط¶ط؛ط· \"ط¨ط¯ط، ط§ظ„ط¹ط¯\".');
   }
 
   List<String> missingMachines() {
@@ -7209,11 +7656,11 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     final f = File('$baseDir/id_debug.txt');
     if (!f.existsSync()) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('مفيش لوج لسه. شغّل الفحص الأول.')),
+        const SnackBar(content: Text('ظ…ظپظٹط´ ظ„ظˆط¬ ظ„ط³ظ‡. ط´ط؛ظ‘ظ„ ط§ظ„ظپط­طµ ط§ظ„ط£ظˆظ„.')),
       );
       return;
     }
-    await Share.shareXFiles([XFile(f.path, mimeType: 'text/plain')], text: 'لوج إيصالات الدفع');
+    await Share.shareXFiles([XFile(f.path, mimeType: 'text/plain')], text: 'ظ„ظˆط¬ ط¥ظٹطµط§ظ„ط§طھ ط§ظ„ط¯ظپط¹');
   }
 
   @override
@@ -7222,7 +7669,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       canPop: !busy,
       onPopInvokedWithResult: (didPop, _) async {
         if (!didPop && busy) {
-          // الفحص شغال: ما نقفلش الشاشة، نرجّع التطبيق للخلفية بس علشان الفحص يكمّل
+          // ط§ظ„ظپط­طµ ط´ط؛ط§ظ„: ظ…ط§ ظ†ظ‚ظپظ„ط´ ط§ظ„ط´ط§ط´ط©طŒ ظ†ط±ط¬ظ‘ط¹ ط§ظ„طھط·ط¨ظٹظ‚ ظ„ظ„ط®ظ„ظپظٹط© ط¨ط³ ط¹ظ„ط´ط§ظ† ط§ظ„ظپط­طµ ظٹظƒظ…ظ‘ظ„
           _dbg('BACK while busy -> moveToBack');
           try {
             await _chan.invokeMethod('moveToBack');
@@ -7240,6 +7687,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     final pendCount = results.where((r) => r.pending).length;
     final named = results.where((r) => r.newName != null && !r.excluded).length;
     _syncBadge(machBadge, reviewN);
+    machBusyG = busy;
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 54,
@@ -7248,7 +7696,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
         actions: [
           const HeaderButtons(),
           PopupMenuButton<String>(
-            tooltip: tr('المزيد'),
+            tooltip: tr('ط§ظ„ظ…ط²ظٹط¯'),
             onSelected: (v) {
               if (v == 'appearance') {
                 showAppearanceSheet(context);
@@ -7271,10 +7719,12 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                     openFile(settingsPath, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('مقدرتش أعمل ملف الإعدادات. اتأكد من إذن الوصول لكل الملفات.')),
+                      const SnackBar(content: Text('ظ…ظ‚ط¯ط±طھط´ ط£ط¹ظ…ظ„ ظ…ظ„ظپ ط§ظ„ط¥ط¹ط¯ط§ط¯ط§طھ. ط§طھط£ظƒط¯ ظ…ظ† ط¥ط°ظ† ط§ظ„ظˆطµظˆظ„ ظ„ظƒظ„ ط§ظ„ظ…ظ„ظپط§طھ.')),
                     );
                   }
                 });
+              } else if (v == 'wipe') {
+                wipeEverything(context);
               } else if (v == 'clear') {
                 clearAll();
               }
@@ -7283,19 +7733,23 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
               if (MediaQuery.sizeOf(context).width < 400)
                 PopupMenuItem(
                     value: 'appearance',
-                    child: w.Text(AppSettings.of(context).isAr ? 'المظهر واللغة' : 'Theme & language')),
-              const PopupMenuItem(value: 'folder', child: Text('فتح فولدر الإخراج')),
+                    child: w.Text(AppSettings.of(context).isAr ? 'ط§ظ„ظ…ط¸ظ‡ط± ظˆط§ظ„ظ„ط؛ط©' : 'Theme & language')),
+              const PopupMenuItem(value: 'folder', child: Text('ظپطھط­ ظپظˆظ„ط¯ط± ط§ظ„ط¥ط®ط±ط§ط¬')),
               if (pdfDir != null)
-                PopupMenuItem(value: 'src', enabled: !busy, child: const Text('المصدر: رجوع لواتساب')),
+                PopupMenuItem(value: 'src', enabled: !busy, child: const Text('ط§ظ„ظ…طµط¯ط±: ط±ط¬ظˆط¹ ظ„ظˆط§طھط³ط§ط¨')),
               if (destDir != defaultMDest)
-                PopupMenuItem(value: 'out', enabled: !busy, child: const Text('الإخراج: الافتراضي')),
+                PopupMenuItem(value: 'out', enabled: !busy, child: const Text('ط§ظ„ط¥ط®ط±ط§ط¬: ط§ظ„ط§ظپطھط±ط§ط¶ظٹ')),
               PopupMenuItem(
                   value: 'log',
-                  child: w.Text(AppSettings.of(context).isAr ? 'مشاركة اللوج' : 'Share log')),
-              const PopupMenuItem(enabled: false, child: Text('الإصدار $kAppVersion')),
-              PopupMenuItem(value: 'fast', child: Text(fastCount ? 'العد: سريع ← الدقيق (القديم)' : 'العد: دقيق ← السريع')),
-              PopupMenuItem(value: 'settings', child: const Text('إعدادات الماكينات (إكسيل)')),
-              PopupMenuItem(value: 'clear', enabled: !busy, child: const Text('مسح الكل')),
+                  child: w.Text(AppSettings.of(context).isAr ? 'ظ…ط´ط§ط±ظƒط© ط§ظ„ظ„ظˆط¬' : 'Share log')),
+              const PopupMenuItem(enabled: false, child: Text('ط§ظ„ط¥طµط¯ط§ط± $kAppVersion')),
+              PopupMenuItem(value: 'fast', child: Text(fastCount ? 'ط§ظ„ط¹ط¯: ط³ط±ظٹط¹ â†گ ط§ظ„ط¯ظ‚ظٹظ‚ (ط§ظ„ظ‚ط¯ظٹظ…)' : 'ط§ظ„ط¹ط¯: ط¯ظ‚ظٹظ‚ â†گ ط§ظ„ط³ط±ظٹط¹')),
+              PopupMenuItem(value: 'settings', child: const Text('ط¥ط¹ط¯ط§ط¯ط§طھ ط§ظ„ظ…ط§ظƒظٹظ†ط§طھ (ط¥ظƒط³ظٹظ„)')),
+              PopupMenuItem(value: 'clear', enabled: !busy, child: const Text('ظ…ط³ط­ ط§ظ„ظƒظ„')),
+              PopupMenuItem(
+                  value: 'wipe',
+                  enabled: !busy,
+                  child: w.Text(AppSettings.of(context).isAr ? 'ًں§¹ ظ…ط³ط­ ظƒظ„ ط­ط§ط¬ط© (ظƒط§ط´ + ظ…ط¤ظ‚طھ)' : 'ًں§¹ Wipe everything (cache + temp)')),
             ],
           ),
         ],
@@ -7305,7 +7759,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
             ? OutlinedButton.icon(
                 onPressed: stopReq ? null : () => setState(() => stopReq = true),
                 icon: const Icon(Icons.stop),
-                label: const Text('إيقاف'),
+                label: const Text('ط¥ظٹظ‚ط§ظپ'),
               )
             : Row(
                 children: [
@@ -7313,7 +7767,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                     child: OutlinedButton.icon(
                       onPressed: () => start(),
                       icon: const Icon(Icons.drive_file_rename_outline),
-                      label: const Text('فحص وتسمية'),
+                      label: const Text('ظپط­طµ ظˆطھط³ظ…ظٹط©'),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -7321,7 +7775,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                     child: FilledButton.icon(
                       onPressed: pendCount > 0 ? () => start(resumeOnly: true, count: true) : null,
                       icon: const Icon(Icons.play_arrow),
-                      label: Text(pendCount > 0 ? 'بدء العد ($pendCount)' : 'بدء العد'),
+                      label: Text(pendCount > 0 ? 'ط¨ط¯ط، ط§ظ„ط¹ط¯ ($pendCount)' : 'ط¨ط¯ط، ط§ظ„ط¹ط¯'),
                     ),
                   ),
                 ],
@@ -7338,7 +7792,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
               sharedDays.value = d;
             }),
             const Divider(height: 10),
-            _pathRow(Icons.folder_open, 'المصدر', pdfDir ?? 'واتساب - مستندات (تلقائي)',
+            _pathRow(Icons.folder_open, 'ط§ظ„ظ…طµط¯ط±', pdfDir ?? 'ظˆط§طھط³ط§ط¨ - ظ…ط³طھظ†ط¯ط§طھ (طھظ„ظ‚ط§ط¦ظٹ)',
                 busy ? null : pickDir,
                 onReset: pdfDir != null && !busy
                     ? () {
@@ -7346,9 +7800,9 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                         setState(() => pdfDir = null);
                       }
                     : null),
-            _pathRow(Icons.add_photo_alternate, 'اختيار PDF يدوياً', 'فتح معرض الملفات', busy ? null : pickManualPdfs),
-            _pathRow(Icons.drive_file_move_outline, 'الإخراج',
-                '$destDir${destDir == defaultMDest ? ' (افتراضي)' : ''}', busy ? null : pickOut,
+            _pathRow(Icons.add_photo_alternate, 'ط§ط®طھظٹط§ط± PDF ظٹط¯ظˆظٹط§ظ‹', 'ظپطھط­ ظ…ط¹ط±ط¶ ط§ظ„ظ…ظ„ظپط§طھ', busy ? null : pickManualPdfs),
+            _pathRow(Icons.drive_file_move_outline, 'ط§ظ„ط¥ط®ط±ط§ط¬',
+                '$destDir${destDir == defaultMDest ? ' (ط§ظپطھط±ط§ط¶ظٹ)' : ''}', busy ? null : pickOut,
                 onReset: destDir != defaultMDest && !busy ? useDefaultOut : null),
           ]),
           _statusBox(status),
@@ -7359,18 +7813,18 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
             spacing: 6,
             runSpacing: 6,
             children: [
-              _mini(Icons.chat, 'إرسال الكل ($named)',
+              _mini(Icons.chat, 'ط¥ط±ط³ط§ظ„ ط§ظ„ظƒظ„ ($named)',
                   (busy && !namingDone) || named == 0 ? null : shareAll,
                   filled: true),
-              _mini(Icons.insights, _l(context, 'التقرير', 'Report'), results.isEmpty ? null : openOverview,
+              _mini(Icons.insights, _l(context, 'ط§ظ„طھظ‚ط±ظٹط±', 'Report'), results.isEmpty ? null : openOverview,
                   filled: true),
               if (reviewOnly && reviewN > 0)
-                _mini(Icons.done_all, 'الباقي صح ($reviewN)', busy ? null : markRestOk),
+                _mini(Icons.done_all, 'ط§ظ„ط¨ط§ظ‚ظٹ طµط­ ($reviewN)', busy ? null : markRestOk),
             ],
           ),
           Padding(
             padding: const EdgeInsets.only(top: 4, bottom: 2),
-            child: Text('اسحب أي ملف لتعليمه: صح ✓ أو غلط ✗',
+            child: Text('ط§ط³ط­ط¨ ط£ظٹ ظ…ظ„ظپ ظ„طھط¹ظ„ظٹظ…ظ‡: طµط­ âœ“ ط£ظˆ ط؛ظ„ط· âœ—',
                 style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant)),
           ),
           if (missing.isNotEmpty) ...[
@@ -7382,15 +7836,14 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                 border: Border.all(color: _tintBorder(context, Colors.amber)),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Text('⚠️ ماكينات ما وصلش ملفها (${missing.length}): ${missing.join(' ، ')}',
+              child: Text('âڑ ï¸ڈ ظ…ط§ظƒظٹظ†ط§طھ ظ…ط§ ظˆطµظ„ط´ ظ…ظ„ظپظ‡ط§ (${missing.length}): ${missing.join(' طŒ ')}',
                   style: const TextStyle(fontSize: 13)),
             ),
           ],
           const SizedBox(height: 10),
           for (final r in results.where((r) => !reviewOnly || !r.ok))
             Builder(builder: (context) {
-              final e = int.tryParse(r.ctl.text.trim());
-              final match = (e == null || r.pending || r.excluded) ? null : e == r.count;
+              final match = _batchMatch(r);
               return Dismissible(
                 key: ValueKey('t_${r.key}'),
                 confirmDismiss: (dir) async {
@@ -7401,13 +7854,13 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                   color: _tintBg(context, Colors.green, strong: true),
                   alignment: AlignmentDirectional.centerStart,
                   padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: const Text('صح ✓', style: TextStyle(fontWeight: FontWeight.bold)),
+                  child: const Text('طµط­ âœ“', style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
                 secondaryBackground: Container(
                   color: _tintBg(context, Colors.red, strong: true),
                   alignment: AlignmentDirectional.centerEnd,
                   padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: const Text('غلط ✗', style: TextStyle(fontWeight: FontWeight.bold)),
+                  child: const Text('ط؛ظ„ط· âœ—', style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
                 child: Card(
                   margin: const EdgeInsets.symmetric(vertical: 2),
@@ -7419,14 +7872,14 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                   child: ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 12),
                     onTap: () => openReport(r),
-                    title: Text(r.newName ?? '؟ ${r.pdfName}',
+                    title: Text(r.newName ?? 'طں ${r.pdfName}',
                         style: TextStyle(
                             fontWeight: FontWeight.bold,
                             decoration: r.excluded ? TextDecoration.lineThrough : null)),
                     subtitle: w.Text(
-                        '${r.verdict > 0 ? _l(context, '✓ اتراجع: صح\n', '✓ Reviewed: OK\n') : ''}'
-                        '${r.pending && busy ? _l(context, 'بيتعدّ...', 'Counting...') : _mSummary(context, r)}'
-                        '${r.notes.isEmpty ? '' : '\n${_l(context, '⚠️ ${r.notes.length} ملاحظة - اضغط لفتح التقرير', '⚠️ ${r.notes.length} note(s) - tap to open the report')}'}'),
+                        '${r.verdict > 0 ? _l(context, 'âœ“ ط§طھط±ط§ط¬ط¹: طµط­\n', 'âœ“ Reviewed: OK\n') : ''}'
+                        '${r.pending && busy ? _l(context, 'ط¨ظٹطھط¹ط¯ظ‘...', 'Counting...') : _mSummary(context, r)}'
+                        '${r.notes.isEmpty ? '' : '\n${_l(context, 'âڑ ï¸ڈ ${r.notes.length} ظ…ظ„ط§ط­ط¸ط© - ط§ط¶ط؛ط· ظ„ظپطھط­ ط§ظ„طھظ‚ط±ظٹط±', 'âڑ ï¸ڈ ${r.notes.length} note(s) - tap to open the report')}'}'),
                     trailing: SizedBox(
                       width: 118,
                       child: Row(
@@ -7442,7 +7895,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                                 isDense: true,
                                 contentPadding:
                                     const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
-                                hintText: tr('الصح'),
+                                hintText: _batchAutoOf(r)?.toString() ?? tr('ط§ظ„طµط­'),
                                 hintStyle: const TextStyle(fontSize: 13),
                                 border: const OutlineInputBorder(),
                                 filled: match != null,
@@ -7457,7 +7910,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                             ),
                           ),
                           PopupMenuButton<String>(
-                            tooltip: tr('المزيد'),
+                            tooltip: tr('ط§ظ„ظ…ط²ظٹط¯'),
                             padding: EdgeInsets.zero,
                             onSelected: (v) {
                               if (v == 'report') {
@@ -7477,20 +7930,20 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                             itemBuilder: (_) => [
                               PopupMenuItem(
                                   value: 'report',
-                                  child: w.Text(_l(context, 'تقرير الإيصال', 'Receipt report'))),
+                                  child: w.Text(_l(context, 'طھظ‚ط±ظٹط± ط§ظ„ط¥ظٹطµط§ظ„', 'Receipt report'))),
                               PopupMenuItem(
                                   value: 'open',
-                                  child: w.Text(_l(context, 'فتح الملف', 'Open file'))),
+                                  child: w.Text(_l(context, 'ظپطھط­ ط§ظ„ظ…ظ„ظپ', 'Open file'))),
                               PopupMenuItem(
                                   value: 'share',
                                   enabled: r.newName != null && !r.excluded,
-                                  child: const Text('إرسال الملف')),
+                                  child: const Text('ط¥ط±ط³ط§ظ„ ط§ظ„ظ…ظ„ظپ')),
                               PopupMenuItem(
-                                  value: 'assign', enabled: !busy, child: const Text('تحديد الماكينة')),
+                                  value: 'assign', enabled: !busy, child: const Text('طھط­ط¯ظٹط¯ ط§ظ„ظ…ط§ظƒظٹظ†ط©')),
                               PopupMenuItem(
-                                  value: 'recount', enabled: !busy, child: const Text('إعادة العد')),
+                                  value: 'recount', enabled: !busy, child: const Text('ط¥ط¹ط§ط¯ط© ط§ظ„ط¹ط¯')),
                               if (r.verdict != 0)
-                                const PopupMenuItem(value: 'clear', child: Text('إلغاء علامة صح/غلط')),
+                                const PopupMenuItem(value: 'clear', child: Text('ط¥ظ„ط؛ط§ط، ط¹ظ„ط§ظ…ط© طµط­/ط؛ظ„ط·')),
                             ],
                           ),
                         ],
