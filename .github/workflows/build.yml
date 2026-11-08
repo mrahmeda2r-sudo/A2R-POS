@@ -18,7 +18,37 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Fix Arabic encoding in main.dart (if broken)
-        run: python3 fix_encoding.py main.dart
+        run: |
+          python3 - <<'EOF'
+          p = 'main.dart'
+          raw = open(p, 'rb').read()
+          if raw.startswith(b'\xef\xbb\xbf'):
+              raw = raw[3:]
+          text = raw.decode('utf-8')
+          def back(line):
+              out = bytearray()
+              for ch in line:
+                  try:
+                      out += ch.encode('cp1256')
+                  except UnicodeEncodeError:
+                      if ord(ch) < 256:
+                          out.append(ord(ch))
+                      else:
+                          raise
+              return bytes(out).decode('utf-8')
+          if 'ط§' in text or 'ظ„' in text:
+              fixed, bad = [], 0
+              for line in text.split('\n'):
+                  try:
+                      fixed.append(back(line))
+                  except Exception:
+                      fixed.append(line)
+                      bad += 1
+              open(p, 'w', encoding='utf-8', newline='\n').write('\n'.join(fixed))
+              print('fixed encoding, lines left as-is:', bad)
+          else:
+              print('encoding OK, nothing to fix')
+          EOF
 
       - name: Sanity check main.dart
         run: |
