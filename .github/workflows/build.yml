@@ -35,7 +35,7 @@ jobs:
 
       - name: Create Flutter project and add our code
         run: |
-          flutter create --org com.pos --project-name pos_app --platforms android app
+          flutter create --org com.pos2 --project-name pos_app --platforms android app
           cp main.dart app/lib/main.dart
           cd app
           flutter pub add google_mlkit_text_recognition permission_handler pdf "archive:^3.6.1" share_plus image printing shared_preferences file_picker excel
@@ -60,7 +60,7 @@ jobs:
           </paths>
           EOX
           sed -i 's|</application>|    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.pos_fileprovider" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/pos_file_paths"/></provider>\n    <service android:name=".KeepAliveService" android:exported="false" android:foregroundServiceType="dataSync"/>\n    </application>|' android/app/src/main/AndroidManifest.xml
-          sed -i 's|android:label="[^"]*"|android:label="A2R POS"|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|android:label="[^"]*"|android:label="A2R POS 2"|' android/app/src/main/AndroidManifest.xml
           MA=$(find android/app/src/main -name MainActivity.kt | head -1)
           PKG=$(grep -m1 '^package ' "$MA" | sed 's/package //')
           cat > "$MA" <<EOK
