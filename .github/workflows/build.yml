@@ -270,6 +270,42 @@ jobs:
           sed -i "s/^version: .*/version: ${APP_VERSION}+${GITHUB_RUN_NUMBER}/" pubspec.yaml
           
 
+      # ===== الجديد: إضافة الشيتين (assets) وأيقونة التطبيق =====
+      - name: Add assets (sheets) and app icon
+        run: |
+          mkdir -p app/assets
+          cp A2R_Settings.xlsx app/assets/A2R_Settings.xlsx
+          cp template.xlsx app/assets/template.xlsx
+
+          python3 -m pip install --break-system-packages pillow || python3 -m pip install pillow
+          python3 - <<'EOP'
+          from PIL import Image
+          im = Image.open('icon.ico')
+          try:
+              im.size = max(im.ico.sizes())
+              im.load()
+          except Exception:
+              pass
+          im = im.convert('RGBA').resize((1024, 1024), Image.LANCZOS)
+          im.save('app/assets/icon.png')
+          EOP
+
+          cd app
+          sed -i 's|^  uses-material-design: true|  uses-material-design: true\n  assets:\n    - assets/A2R_Settings.xlsx\n    - assets/template.xlsx|' pubspec.yaml
+
+          flutter pub add --dev flutter_launcher_icons
+          cat > flutter_launcher_icons.yaml <<'EOI'
+          flutter_launcher_icons:
+            android: true
+            ios: false
+            image_path: "assets/icon.png"
+            adaptive_icon_background: "#FFFFFF"
+            adaptive_icon_foreground: "assets/icon.png"
+            adaptive_icon_foreground_inset: 20
+          EOI
+          dart run flutter_launcher_icons
+      # ===== نهاية الجديد =====
+
       - name: Gradle - also resolve plugins from Maven Central
         run: |
           mkdir -p ~/.gradle/init.d
