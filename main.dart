@@ -339,6 +339,43 @@ Future<void> loadSettingsFromExcel() async {
     rebuildTerminalIndexes();
   } catch (e) {
     _dbg('Excel load error: $e');
+    _loadSettingsFromJson();
+  }
+}
+
+// نسخة احتياطية: لو قراءة ملف الإكسيل فشلت بنقرا آخر إعدادات اتحفظت (JSON)
+void _loadSettingsFromJson() {
+  try {
+    final jf = File('${settingsPath}.json');
+    if (!jf.existsSync()) return;
+    final m = jsonDecode(jf.readAsStringSync()) as Map<String, dynamic>;
+    final newTerms = <String, TerminalInfo>{};
+    for (final t in (m['terminals'] as List? ?? [])) {
+      newTerms[t['tid'].toString()] =
+          TerminalInfo(t['o'] as int, t['row'] as int, t['name'].toString());
+    }
+    terminals
+      ..clear()
+      ..addAll(newTerms);
+    nameHints
+      ..clear()
+      ..addAll([
+        for (final h in (m['hints'] as List? ?? []))
+          MapEntry(List<String>.from(h['kws'] as List), h['row'] as int)
+      ]);
+    merchantCodeMap
+      ..clear()
+      ..addAll({
+        for (final e in ((m['merchants'] as Map?) ?? {}).entries) e.key.toString(): e.value as int
+      });
+    tidFix
+      ..clear()
+      ..addAll({
+        for (final e in ((m['fixes'] as Map?) ?? {}).entries) e.key.toString(): e.value.toString()
+      });
+    rebuildTerminalIndexes();
+  } catch (e) {
+    _dbg('json load error: $e');
   }
 }
 
@@ -377,6 +414,19 @@ bool saveSettingsToExcel() {
     }
     try {
       excel.delete('Sheet1');
+    } catch (_) {}
+    try {
+      File('${settingsPath}.json').writeAsStringSync(jsonEncode({
+        'terminals': [
+          for (final e in order)
+            {'o': e.value.orderNum, 'tid': e.key, 'row': e.value.excelRow, 'name': e.value.unitName}
+        ],
+        'hints': [
+          for (final h in nameHints) {'row': h.value, 'kws': h.key}
+        ],
+        'merchants': merchantCodeMap,
+        'fixes': tidFix,
+      }));
     } catch (_) {}
     final bytes = excel.save();
     if (bytes == null) return false;
@@ -1886,8 +1936,8 @@ int? _rowForMerchant(String mid) {
   if (exact != null) return exact;
   for (final e in merchantCodeMap.entries) {
     final k = e.key;
-    if (k.length >= 6 && mid.contains(k)) return e.value;
-    if (k.length == mid.length && k.length >= 8 && _editDistance(k, mid) <= 1) return e.value;
+    // مفيش مطابقة تقريبية: أكواد التجار بتاعة الوحدات بتختلف في رقم واحد بس (…029084 / …026084 / …022084)
+    if (k.length >= 10 && mid.length > k.length && mid.contains(k)) return e.value;
   }
   return null;
 }
