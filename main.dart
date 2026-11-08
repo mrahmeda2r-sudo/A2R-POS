@@ -2818,13 +2818,12 @@ Future<bool> chooseAndOpenFolder(BuildContext context, String path) async {
           for (final h in handlers)
             ListTile(
               leading: h['icon'] != null && h['icon']!.isNotEmpty ? Image.memory(base64Decode(h['icon']!), width: 32, height: 32) : const Icon(Icons.folder, size: 32),
-              title: Text(h['label'] ?? h['pkg'] ?? ''),
-              
+              title: Text(h['label'] ?? h['pkg'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
               onTap: () => Navigator.pop(c, h),
             ),
           ListTile(
             leading: const Icon(Icons.folder_special, size: 32),
-            title: const Text('متصفح ملفات النظام'),
+            title: const Text('متصفح ملفات النظام', style: const TextStyle(fontWeight: FontWeight.bold)),
             onTap: () => Navigator.pop(c, <String, String>{'pkg': '', 'cls': '', 'kind': 'tree'}),
           ),
         ],
@@ -2946,13 +2945,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   
   Future<void> pickManualImages() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowMultiple: true,
-    );
-    if (result != null && result.files.isNotEmpty) {
-      final paths = result.paths.whereType<String>().toList();
-      _runPipelineInner(manualPaths: paths);
+    try {
+      final result = await FilePicker.pickFiles(type: FileType.image);
+      if (result.isNotEmpty) {
+        final paths = result.map((f) => f.path).whereType<String>().toList();
+        _runPipelineInner(manualPaths: paths);
+      }
+    } catch (e) {
+      _dbg('pickManualImages error: $e');
     }
   }
 
@@ -3538,6 +3538,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
       } catch (_) {}
       cpdfs.sort((a, b) => baseName(a.path).compareTo(baseName(b.path)));
+    if (manualPaths != null) pdfs.addAll(manualPaths.map((p) => File(p)));
       var pdfPages = 0;
       final used = <String>[];
       for (final pf in cpdfs) {
@@ -6000,15 +6001,26 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   }
 
   
-  Future<void> pickManualImages() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowMultiple: true,
-    );
-    if (result != null && result.files.isNotEmpty) {
-      final paths = result.paths.whereType<String>().toList();
-      _runPipelineInner(manualPaths: paths);
+  Future<void> pickManualPdfs() async {
+    try {
+      final result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
+      if (result.isNotEmpty) {
+        final paths = result.map((f) => f.path).whereType<String>().toList();
+        _run(false, false, manualPaths: paths);
+      }
+    } catch (e) {
+      _dbg('pickManualPdfs error: $e');
     }
+  }
+
+  Future<void> openFile(String? path, String mime) async {
+    if (path == null || !File(path).existsSync()) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('الملف مش موجود.')));
+      return;
+    }
+    try {
+      await _chan.invokeMethod<bool>('openFile', {'path': path, 'mime': mime});
+    } catch (_) {}
   }
 
   void useDefaultOut() {
@@ -6251,7 +6263,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     }
   }
 
-  Future<void> _run(bool resumeOnly, bool count) async {
+  Future<void> _run(bool resumeOnly, bool count, {List<String>? manualPaths}) async {
     setState(() {
       busy = true;
       stopReq = false;
@@ -6272,7 +6284,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       } catch (_) {}
       _dbg('PHASE1 start resumeOnly=$resumeOnly');
       namingDone = resumeOnly;
-      if (!resumeOnly) idle = await _identifyAll(rec);
+      if (!resumeOnly) idle = await _identifyAll(rec, manualPaths: manualPaths);
       _dbg('PHASE1 done');
       if (mounted) setState(() => namingDone = true);
       // المرحلة 2 (بطيئة): عدّ الإيصالات جوه كل ملف: مش بتشتغل غير لما تضغط "بدء العد"
@@ -6312,8 +6324,9 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   }
 
   // بيرجّع رسالة لو مفيش حاجة جديدة يفحصها
-  Future<String?> _identifyAll(TextRecognizer rec) async {
+  Future<String?> _identifyAll(TextRecognizer rec, {List<String>? manualPaths}) async {
     final dirs = pdfDir != null ? [Directory(pdfDir!)] : findWhatsAppDocDirs();
+    if (manualPaths != null) dirs.clear();
     final now = DateTime.now();
     final cutoff = days < 0
         ? DateTime(2000)
@@ -6357,6 +6370,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       } catch (_) {}
     }
     pdfs.sort((a, b) => baseName(a.path).compareTo(baseName(b.path)));
+    if (manualPaths != null) pdfs.addAll(manualPaths.map((p) => File(p)));
     if (pdfs.isEmpty) {
       if (dirs.isEmpty) return 'مش لاقي فولدر مستندات واتساب. اختار فولدر بإيدك.';
       return skipped > 0
@@ -6986,7 +7000,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                         setState(() => pdfDir = null);
                       }
                     : null),
-            _pathRow(Icons.add_photo_alternate, 'اختيار صور يدوياً', 'فتح معرض الصور', busy ? null : pickManualImages),
+            _pathRow(Icons.add_photo_alternate, 'اختيار PDF يدوياً', 'فتح معرض الملفات', busy ? null : pickManualPdfs),
             _pathRow(Icons.drive_file_move_outline, 'الإخراج',
                 '$destDir${destDir == defaultMDest ? ' (افتراضي)' : ''}', busy ? null : pickOut,
                 onReset: destDir != defaultMDest && !busy ? useDefaultOut : null),
@@ -7110,9 +7124,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                                 recount(r);
                               } else if (v == 'assign') {
                                 assignMachine(r);
-                              } else if (v == 'settings') {
-                openFile(settingsPath, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-              } else if (v == 'clear') {
+                              } else if (v == 'clear') {
                                 setVerdict(r, 0, toggle: false);
                               }
                             },
