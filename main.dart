@@ -79,6 +79,205 @@ void _dbg(String m) {
   } catch (_) {}
 }
 
+// ───────────────────── دوال مساعدة كانت ناقصة ─────────────────────
+const MethodChannel _chan = MethodChannel('pos/native');
+
+String _l(BuildContext c, String ar, String en) => AppSettings.of(c).isAr ? ar : en;
+
+String _normAr(String s) => s
+    .replaceAll(RegExp('[\u064B-\u065F\u0670\u0640]'), '')
+    .replaceAll(RegExp('[\u0623\u0625\u0622\u0671]'), '\u0627')
+    .replaceAll('\u0629', '\u0647')
+    .replaceAll('\u0649', '\u064A')
+    .replaceAllMapped(RegExp('[\u0660-\u0669]'), (m) => (m[0]!.codeUnitAt(0) - 0x0660).toString())
+    .trim();
+
+List<Map<String, String>> _toHandlers(List<dynamic>? raw) => [
+      for (final e in raw ?? const <dynamic>[])
+        if (e is Map) {for (final k in e.entries) k.key.toString(): k.value?.toString() ?? ''}
+    ];
+
+Widget _handlerIcon(String? b64) {
+  if (b64 == null || b64.isEmpty) return const Icon(Icons.folder_open);
+  try {
+    return Image.memory(base64Decode(b64), width: 32, height: 32);
+  } catch (_) {
+    return const Icon(Icons.folder_open);
+  }
+}
+
+Future<Map<String, String>?> chooseHandler(
+  BuildContext context, {
+  required String title,
+  required List<Map<String, String>> handlers,
+  required String prefKey,
+  required Map<String, String> systemOption,
+}) async {
+  final cfg = _readCfg();
+  final saved = cfg['handler_$prefKey'];
+  if (saved is Map) {
+    final m = {for (final e in saved.entries) e.key.toString(): e.value?.toString() ?? ''};
+    final pkg = m['pkg'] ?? '';
+    if (pkg.isEmpty || handlers.any((h) => h['pkg'] == pkg && h['cls'] == m['cls'])) return m;
+  }
+  var remember = false;
+  final opts = <Map<String, String>>[systemOption, ...handlers];
+  final r = await showDialog<Map<String, String>>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setS) => AlertDialog(
+        title: Text(title),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final o in opts)
+                      ListTile(
+                        dense: true,
+                        leading: _handlerIcon(o['icon']),
+                        title: Text(o['label'] ?? o['pkg'] ?? ''),
+                        onTap: () => Navigator.pop(ctx, o),
+                      ),
+                  ],
+                ),
+              ),
+              CheckboxListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                value: remember,
+                onChanged: (v) => setS(() => remember = v == true),
+                title: const Text('افتكر اختياري'),
+              ),
+            ],
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء'))],
+      ),
+    ),
+  );
+  if (r != null && remember) {
+    final c2 = _readCfg();
+    c2['handler_$prefKey'] = {'pkg': r['pkg'] ?? '', 'cls': r['cls'] ?? '', 'kind': r['kind'] ?? '', 'label': r['label'] ?? ''};
+    _writeCfg(c2);
+  }
+  return r;
+}
+
+Future<void> resetDefaultHandlers(BuildContext context) async {
+  final cfg = _readCfg();
+  cfg.removeWhere((k, _) => k.startsWith('handler_'));
+  _writeCfg(cfg);
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم. هيسألك تاني في المرة الجاية.')));
+  }
+}
+
+class FolderPicker extends StatefulWidget {
+  final String start;
+  const FolderPicker({super.key, required this.start});
+  @override
+  State<FolderPicker> createState() => _FolderPickerState();
+}
+
+class _FolderPickerState extends State<FolderPicker> {
+  late String cur;
+  @override
+  void initState() {
+    super.initState();
+    cur = widget.start;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final subs = _subDirs(cur).where((d) => !baseName(d.path).startsWith('.')).toList()
+      ..sort((a, b) => baseName(a.path).toLowerCase().compareTo(baseName(b.path).toLowerCase()));
+    final canUp = cur.length > root.length;
+    return Scaffold(
+      appBar: AppBar(
+        title: w.Text(cur, textDirection: TextDirection.ltr, style: const TextStyle(fontSize: 13)),
+      ),
+      body: ListView(
+        children: [
+          if (canUp)
+            ListTile(
+              leading: const Icon(Icons.arrow_upward),
+              title: const w.Text('..'),
+              onTap: () => setState(() => cur = Directory(cur).parent.path),
+            ),
+          for (final d in subs)
+            ListTile(
+              leading: const Icon(Icons.folder),
+              title: w.Text(baseName(d.path), textDirection: TextDirection.ltr),
+              onTap: () => setState(() => cur = d.path),
+            ),
+        ],
+      ),
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.all(8),
+        child: SizedBox(
+          height: 44,
+          child: FilledButton.icon(
+            onPressed: () => Navigator.pop(context, cur),
+            icon: const Icon(Icons.check),
+            label: const w.Text('اختيار الفولدر ده'),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ───────────────────── نماذج البيانات ─────────────────────
+class ReceiptItem {
+  String path;
+  String? tid;
+  int? orderNum;
+  int? txn;
+  double amount;
+  bool userExcluded;
+  bool ignoredDoc;
+  bool needsReview;
+  String? ign;
+  ReceiptItem({
+    this.path = '',
+    this.tid,
+    this.orderNum,
+    this.txn,
+    this.amount = 0,
+    this.userExcluded = false,
+    this.ignoredDoc = false,
+    this.needsReview = false,
+    this.ign,
+  });
+  bool get counts => !userExcluded && !ignoredDoc && ign != 'drop' && amount > 0;
+}
+
+class MResult {
+  String path;
+  String name;
+  int? machine;
+  int? count;
+  bool done;
+  bool needsReview;
+  final TextEditingController ctl = TextEditingController();
+  MResult({this.path = '', this.name = '', this.machine, this.count, this.done = false, this.needsReview = false});
+}
+
+int _cmpM(MResult a, MResult b) {
+  final am = a.machine ?? 1 << 30, bm = b.machine ?? 1 << 30;
+  if (am != bm) return am.compareTo(bm);
+  return a.name.compareTo(b.name);
+}
+
+String loadMOut() => (_readCfg()['mout'] as String?) ?? '$baseDir/payment_receipts';
+String? loadPdfDir() => _readCfg()['pdfDir'] as String?;
+List<MResult> loadMState() => <MResult>[]; // الحالة المحفوظة (فاضية دلوقتي)
+
 bool _isAppReportName(String n) => RegExp(
         r'^(نتيجه|ناتج|الاسكندريه)\s*(\d{1,2}[.\-_]\d{1,2}|اليوم)(\s*\(\d+\))?\.pdf$')
     .hasMatch(_normAr(n));
@@ -222,7 +421,7 @@ Widget _statusBox(String text) => Builder(
       ),
     );
 
-Future?> transferFilesViaPicker(BuildContext context, List<String> paths) async {
+Future<Map<String, String>?> transferFilesViaPicker(BuildContext context, List<String> paths) async {
   final existing = paths.where((p) => File(p).existsSync()).toList();
   if (existing.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('مفيش ملفات جاهزة للنقل.')));
@@ -253,10 +452,16 @@ Future?> transferFilesViaPicker(BuildContext context, List<String> paths) async 
     final picked = await chooseHandler(context, title: 'افتح بإيه عشان تختار الفولدر؟', handlers: handlers, prefKey: 'dest_folder_picker', systemOption: <String, String>{'pkg': '', 'cls': '', 'kind': 'tree', 'label': 'متصفح ملفات النظام'});
     if (picked == null) return null;
     final r = await _chan.invokeMethod<String>('pickFolderWith', {'pkg': picked['pkg'] ?? '', 'cls': picked['cls'] ?? ''});
-    if (r == null || r == '?') fallback = true;
-    else if (r.isEmpty) return null;
-    else dir = r;
-  } catch (_) { fallback = true; }
+    if (r == null || r == '?') {
+      fallback = true;
+    } else if (r.isEmpty) {
+      return null;
+    } else {
+      dir = r;
+    }
+  } catch (_) {
+    fallback = true;
+  }
   if (fallback) {
     if (!context.mounted) return null;
     dir = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => FolderPicker(start: root)));
@@ -340,11 +545,17 @@ Widget _moreMenu(BuildContext context, {required bool busy, required VoidCallbac
   return PopupMenuButton<String>(
     tooltip: tr('المزيد'),
     onSelected: (v) {
-      if (v == 'appearance') showAppearanceSheet(context);
-      else if (v == 'battery') askBatteryExempt(force: true);
-      else if (v == 'resetApps') resetDefaultHandlers(context);
-      else if (v == 'log') onLog();
-      else if (v == 'wipe') wipeEverything(context);
+      if (v == 'appearance') {
+        showAppearanceSheet(context);
+      } else if (v == 'battery') {
+        askBatteryExempt(force: true);
+      } else if (v == 'resetApps') {
+        resetDefaultHandlers(context);
+      } else if (v == 'log') {
+        onLog();
+      } else if (v == 'wipe') {
+        wipeEverything(context);
+      }
     },
     itemBuilder: (_) => [
       if (MediaQuery.sizeOf(context).width < 400) PopupMenuItem(value: 'appearance', child: w.Text(ar ? 'المظهر واللغة' : 'Theme & language')),
@@ -707,7 +918,7 @@ class AppSettings extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
   }
   @override void didChangeLocales(List<Locale>? locales) { if (langCode == null) notifyListeners(); }
-  void setLang(String? code) { langCode = code; try { if (code == null) _prefs?.remove('lang'); else _prefs?.setString('lang', code); } catch (_) {} notifyListeners(); }
+  void setLang(String? code) { langCode = code; try { if (code == null) { _prefs?.remove('lang'); } else { _prefs?.setString('lang', code); } } catch (_) {} notifyListeners(); }
   void setMode(ThemeMode m) { themeMode = m; try { _prefs?.setString('theme_mode', m == ThemeMode.dark ? 'dark' : (m == ThemeMode.light ? 'light' : 'system')); } catch (_) {} notifyListeners(); }
   void setSeed(int i) { seedIndex = i; try { _prefs?.setInt('seed', i); } catch (_) {} notifyListeners(); }
   static AppSettings of(BuildContext context) {
@@ -723,7 +934,7 @@ const List<Color> kSeeds = [Colors.teal, Colors.blue, Colors.indigo, Colors.gree
 const List<String> kSeedNamesAr = ['تيل', 'أزرق', 'نيلي', 'أخضر', 'برتقالي', 'بنفسجي', 'A2R (الهوية)'];
 const List<String> kSeedNamesEn = ['Teal', 'Blue', 'Indigo', 'Green', 'Orange', 'Purple', 'A2R (brand)'];
 
-final ValueNotifier> closingTxn = ValueNotifier>(<int, int>{});
+final ValueNotifier<Map<int, int>> closingTxn = ValueNotifier<Map<int, int>>(<int, int>{});
 final ValueNotifier<int> wipeSignal = ValueNotifier<int>(0);
 bool homeBusyG = false;
 bool machBusyG = false;
@@ -815,7 +1026,7 @@ void _publishClosing(List<ReceiptItem> items) {
     if (t == null) { bad.add(n); continue; }
     sums[n] = (sums[n] ?? 0) + t;
   }
-  for (final n in bad) sums.remove(n);
+  for (final n in bad) { sums.remove(n); }
   closingTxn.value = sums;
 }
 
@@ -1065,8 +1276,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   String _scanSig() { /* ...logic for watching folder... */ return ''; }
   Future<void> _watchService(bool on) async {
     try {
-      if (on) await _chan.invokeMethod('startKeepAlive', {'title': 'A2R POS', 'text': 'مراقبة الإيصالات الجديدة...'});
-      else await _chan.invokeMethod('stopKeepAlive');
+      if (on) {
+        await _chan.invokeMethod('startKeepAlive', {'title': 'A2R POS', 'text': 'مراقبة الإيصالات الجديدة...'});
+      } else {
+        await _chan.invokeMethod('stopKeepAlive');
+      }
     } catch (_) {}
   }
   void _startAuto() { _autoTimer?.cancel(); _autoTimer = Timer.periodic(const Duration(seconds: 15), (_) => _autoTick()); _watchService(true); }
@@ -1151,7 +1365,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   }
   void _onWipe() {
     if (!mounted) return;
-    for (final r in results) r.ctl.dispose();
+    for (final r in results) { r.ctl.dispose(); }
     setState(() {
       results.clear(); progressValue = 0; namingDone = false; reviewOnly = false;
       status = 'تم مسح كل حاجة. اضغط "فحص وإعادة تسمية" لبدء يوم جديد.';
