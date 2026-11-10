@@ -809,6 +809,7 @@ void _publishClosing(List<ReceiptItem> items) {
     }
   }
   if (same) return;
+  _dbg('LINK closing (ماكينة->معاملات): $sums | ماكينات متسجلة: ${terminals.length}');
   WidgetsBinding.instance.addPostFrameCallback((_) => closingTxn.value = sums);
 }
 
@@ -8143,6 +8144,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
 
   Future<void> _run(bool resumeOnly, bool count, {List<String>? manualPaths}) async {
     await prepareDefaultFiles();
+    _dbg('MACH start: ماكينات متسجلة=${terminals.length} | ربط التقفيل=${closingTxn.value}');
     setState(() {
       busy = true;
       stopReq = false;
@@ -8505,7 +8507,9 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     r.tidUsed = tid;
     if (tid == null || !terminals.containsKey(tid)) {
       r.idOk = false;
-      r.idNotes.add('مش قادر أعرف الماكينة من الـ PDF');
+      r.idNotes.add(terminals.isEmpty
+          ? 'مفيش ماكينات متسجلة: شغّل فحص الباتشات (التقفيل) الأول علشان يتعلّم الماكينات، أو املا A2R_Settings'
+          : 'مش قادر أعرف الماكينة من الـ PDF${tid != null ? ' (الرقم $tid مش متسجل في الماكينات)' : ''}');
       return;
     }
     final info = terminals[tid]!;
@@ -9251,9 +9255,21 @@ int? _cellInt(ex.Data? d) {
 }
 
 // بيقرا ملف الإعدادات (الماكينات / كلمات الوحدات / أكواد التاجر / تصحيح الأرقام). لو مفيش ملف الإعدادات فاضية.
-Future<void> loadSettingsFromExcel() async {
+int _settingsStamp = 0; // آخر تعديل للملف عرفناه (بنكتبه أو بنقراه) علشان ما نعيدش تحميل نفس الملف
+
+int _fileStamp(File f) {
+  try {
+    return f.lastModifiedSync().millisecondsSinceEpoch;
+  } catch (_) {
+    return 0;
+  }
+}
+
+Future<void> loadSettingsFromExcel({bool force = false}) async {
   try {
     final f = File(settingsPath);
+    // الملف ما اتغيرش من آخر مرة والماكينات في الذاكرة: نفضل عليها (متضيعش اللي اتعلّمته)
+    if (!force && terminals.isNotEmpty && f.existsSync() && _fileStamp(f) == _settingsStamp) return;
     if (!f.existsSync()) {
       terminals.clear();
       tidFix.clear();
@@ -9326,6 +9342,8 @@ Future<void> loadSettingsFromExcel() async {
     terminals.removeWhere((tid, _) =>
         tid.length == 8 && merchantCodeMap.keys.any((k) => k.length >= 10 && k.contains(tid)));
     rebuildTerminalIndexes();
+    _settingsStamp = _fileStamp(f);
+    _dbg('SETTINGS loaded: ${terminals.length} ماكينة، ${merchantCodeMap.length} كود تاجر');
   } catch (e) {
     _dbg('Excel load error: $e');
     _loadSettingsFromJson();
@@ -9420,6 +9438,7 @@ bool saveSettingsToExcel() {
     final bytes = excel.save();
     if (bytes == null) return false;
     f.writeAsBytesSync(bytes);
+    _settingsStamp = _fileStamp(f);
     return true;
   } catch (e) {
     _dbg('settings save error: $e');
@@ -9527,6 +9546,7 @@ Future<bool> ensureSettingsFile() async {
 
 // بيفتح ملف إعدادات الماكينات (A2R_Settings.xlsx) وبيعمله لو مش موجود
 Future<void> openSettingsFile(BuildContext context) async {
+  await loadSettingsFromExcel();
   final ok = await ensureSettingsFile();
   if (!context.mounted) return;
   if (!ok) {
