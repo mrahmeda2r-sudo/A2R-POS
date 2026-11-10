@@ -1478,182 +1478,462 @@ String machineLabel(int i) {
   return 'ماكينة $i${t == null || t.unitName.isEmpty ? '' : ' - ${t.unitName}'}';
 }
 
-String _cellText(ex.Data? d) {
-  final v = d?.value;
-  if (v == null) return '';
-  var t = v.toString().trim();
-  if (RegExp(r'^\d+\.0+$').hasMatch(t)) t = t.substring(0, t.indexOf('.'));
-  return t;
+final List<RegExp> _markers = [
+  RegExp(r'TERMINAL', caseSensitive: false),
+  RegExp(r'GRAND|TOTALS?', caseSensitive: false),
+  RegExp(r'NATIONAL\s*BANK|\bNBE\b', caseSensitive: false),
+  RegExp(r'BATCH', caseSensitive: false),
+  RegExp(r'MERCHANT', caseSensitive: false),
+  RegExp(r'SUCCESSF|CLOSED', caseSensitive: false),
+  RegExp(r'\bVISA\b|MASTER|MEZZA|MEEZA|MEEZ', caseSensitive: false),
+  RegExp(r'THANK\s*YOU', caseSensitive: false),
+  RegExp(r'NET\s*AMOUNT', caseSensitive: false),
+  RegExp(r'\bSALE\b', caseSensitive: false),
+];
+
+int receiptScore(String text) => _markers.where((r) => r.hasMatch(text)).length;
+
+// سطر نص مع مكانه في الصورة
+class OcrLine {
+  final String text;
+  final double left, right, top, bottom;
+  OcrLine(this.text, this.left, this.right, this.top, this.bottom);
+  double get cy => (top + bottom) / 2;
+  double get h => bottom - top;
 }
 
-int? _cellInt(ex.Data? d) {
-  final t = _cellText(d);
-  return int.tryParse(t) ?? double.tryParse(t)?.toInt();
-}
-
-Future<void> loadSettingsFromExcel() async {
-  try {
-    final f = File(settingsPath);
-    if (!f.existsSync()) {
-      terminals.clear();
-      tidFix.clear();
-      merchantCodeMap.clear();
-      nameHints.clear();
-      rebuildTerminalIndexes();
-      return;
+List<OcrLine> toLines(RecognizedText res) {
+  final out = <OcrLine>[];
+  for (final b in res.blocks) {
+    for (final l in b.lines) {
+      final t = l.text.trim();
+      if (t.isEmpty) continue;
+      final r = l.boundingBox;
+      out.add(OcrLine(t, r.left, r.right, r.top, r.bottom));
     }
-    final excel = ex.Excel.decodeBytes(f.readAsBytesSync());
-
-    List<List<ex.Data?>> rowsOf(String name) {
-      final sh = excel.tables[name];
-      if (sh == null || sh.maxRows < 2) return <List<ex.Data?>>[];
-      return sh.rows.skip(1).toList();
-    }
-
-    final newTerms = <String, TerminalInfo>{};
-    for (final r in rowsOf('Terminals')) {
-      if (r.length < 3) continue;
-      final order = _cellInt(r[0]);
-      final tid = _cellText(r[1]);
-      final xlRow = _cellInt(r[2]);
-      var name = r.length > 3 ? _cellText(r[3]) : '';
-      if (order == null || tid.isEmpty || xlRow == null) continue;
-      if (name.isEmpty) name = 'وحدة $xlRow';
-      newTerms[tid] = TerminalInfo(order, xlRow, name);
-    }
-
-    final newHints = <MapEntry<List<String>, int>>[];
-    for (final r in rowsOf('Name_Hints')) {
-      if (r.length < 2) continue;
-      final row = _cellInt(r[0]);
-      final kws = _cellText(r[1])
-          .split(RegExp(r'[,;،|]'))
-          .map((e) => e.trim().toUpperCase())
-          .where((e) => e.isNotEmpty)
-          .toList();
-      if (row != null && kws.isNotEmpty) newHints.add(MapEntry(kws, row));
-    }
-
-    final newMerch = <String, int>{};
-    for (final r in rowsOf('Merchant_Codes')) {
-      if (r.length < 2) continue;
-      final code = _cellText(r[0]);
-      final row = _cellInt(r[1]);
-      if (code.isNotEmpty && row != null) newMerch[code] = row;
-    }
-
-    final newFix = <String, String>{};
-    for (final r in rowsOf('TID_Fixes')) {
-      if (r.length < 2) continue;
-      final wrong = _cellText(r[0]);
-      final right = _cellText(r[1]);
-      if (wrong.isNotEmpty && right.isNotEmpty) newFix[wrong] = right;
-    }
-
-    terminals
-      ..clear()
-      ..addAll(newTerms);
-    nameHints
-      ..clear()
-      ..addAll(newHints);
-    merchantCodeMap
-      ..clear()
-      ..addAll(newMerch);
-    tidFix
-      ..clear()
-      ..addAll(newFix);
-    
-    terminals.removeWhere((tid, _) =>
-        tid.length == 8 && merchantCodeMap.keys.any((k) => k.length >= 10 && k.contains(tid)));
-    rebuildTerminalIndexes();
-  } catch (e) {
-    _dbg('Excel load error: $e');
-    _loadSettingsFromJson();
   }
+  return out;
 }
 
-void _loadSettingsFromJson() {
-  try {
-    final jf = File('${settingsPath}.json');
-    if (!jf.existsSync()) return;
-    final m = jsonDecode(jf.readAsStringSync()) as Map<String, dynamic>;
-    final newTerms = <String, TerminalInfo>{};
-    for (final t in (m['terminals'] as List? ?? [])) {
-      newTerms[t['tid'].toString()] =
-          TerminalInfo(t['o'] as int, t['row'] as int, t['name'].toString());
+// يرتب النص صفوف (الاسم يمين والرقم جنبه في نفس السطر) زي Tesseract بالظبط
+String rowsText(List<OcrLine> lines) {
+  final ls = [...lines]..sort((a, b) => a.cy.compareTo(b.cy));
+  final rows = <List<OcrLine>>[];
+  for (final l in ls) {
+    if (rows.isNotEmpty) {
+      final last = rows.last;
+      final cy = last.map((e) => e.cy).reduce((a, b) => a + b) / last.length;
+      final h = last.map((e) => e.h).reduce((a, b) => a + b) / last.length;
+      if ((l.cy - cy).abs() < h * 0.6) {
+        last.add(l);
+        continue;
+      }
     }
-    terminals..clear()..addAll(newTerms);
-    nameHints..clear()..addAll([
-        for (final h in (m['hints'] as List? ?? []))
-          MapEntry(List<String>.from(h['kws'] as List), h['row'] as int)
-      ]);
-    merchantCodeMap..clear()..addAll({
-        for (final e in ((m['merchants'] as Map?) ?? {}).entries) e.key.toString(): e.value as int
-      });
-    tidFix..clear()..addAll({
-        for (final e in ((m['fixes'] as Map?) ?? {}).entries) e.key.toString(): e.value.toString()
-      });
-    rebuildTerminalIndexes();
-  } catch (e) {
-    _dbg('json load error: $e');
+    rows.add([l]);
   }
+  final sb = StringBuffer();
+  for (final r in rows) {
+    r.sort((a, b) => a.left.compareTo(b.left));
+    sb.writeln(r.map((e) => e.text).join('  '));
+  }
+  return sb.toString();
 }
 
-bool saveSettingsToExcel() {
-  try {
-    final f = File(settingsPath);
-    f.parent.createSync(recursive: true);
-    final excel = ex.Excel.createExcel();
-    final order = terminals.entries.toList()..sort((a, b) => a.value.orderNum.compareTo(b.value.orderNum));
-    excel.appendRow('Terminals', <ex.CellValue?>[
-      ex.TextCellValue('Order'), ex.TextCellValue('TID'), ex.TextCellValue('Row'), ex.TextCellValue('Unit_Name')
-    ]);
-    for (final e in order) {
-      excel.appendRow('Terminals', <ex.CellValue?>[
-        ex.IntCellValue(e.value.orderNum), ex.TextCellValue(e.key), ex.IntCellValue(e.value.excelRow), ex.TextCellValue(e.value.unitName)
-      ]);
+String readingText(List<OcrLine> lines) => lines.map((e) => e.text).join('\n');
+
+// صورة فيها أكتر من إيصال جنب بعض -> نقسمها لأعمدة
+List<List<OcrLine>> splitColumns(List<OcrLine> lines) {
+  if (lines.length < 8) return [lines];
+  final minL = lines.map((e) => e.left).reduce(math.min);
+  final maxR = lines.map((e) => e.right).reduce(math.max);
+  final w = maxR - minL;
+  if (w <= 0) return [lines];
+  final sorted = [...lines]..sort((a, b) => a.left.compareTo(b.left));
+  for (final tolFrac in const [0.03, 0.02, 0.01]) {
+    final groups = <List<OcrLine>>[];
+    var curRight = -1e9;
+    for (final l in sorted) {
+      if (groups.isEmpty || l.left - curRight > w * tolFrac) {
+        groups.add([l]);
+        curRight = l.right;
+      } else {
+        groups.last.add(l);
+        curRight = math.max(curRight, l.right);
+      }
     }
-    excel.appendRow('Name_Hints', <ex.CellValue?>[ex.TextCellValue('Row'), ex.TextCellValue('Keywords')]);
-    for (final h in nameHints) {
-      excel.appendRow('Name_Hints', <ex.CellValue?>[ex.IntCellValue(h.value), ex.TextCellValue(h.key.join(','))]);
+    final big = groups.where((g) {
+      final gl = g.map((e) => e.left).reduce(math.min);
+      final gr = g.map((e) => e.right).reduce(math.max);
+      return gr - gl >= w * 0.12 && g.length >= 6;
+    }).toList();
+    if (big.length >= 2 &&
+        big.length <= 4 &&
+        big.every((g) => receiptScore(readingText(g)) >= 3)) {
+      return big;
     }
-    excel.appendRow('Merchant_Codes', <ex.CellValue?>[ex.TextCellValue('Merchant_Code'), ex.TextCellValue('Row')]);
-    for (final e in merchantCodeMap.entries) {
-      excel.appendRow('Merchant_Codes', <ex.CellValue?>[ex.TextCellValue(e.key), ex.IntCellValue(e.value)]);
-    }
-    excel.appendRow('TID_Fixes', <ex.CellValue?>[ex.TextCellValue('Wrong_TID'), ex.TextCellValue('Correct_TID')]);
-    for (final e in tidFix.entries) {
-      excel.appendRow('TID_Fixes', <ex.CellValue?>[ex.TextCellValue(e.key), ex.TextCellValue(e.value)]);
-    }
-    try { excel.delete('Sheet1'); } catch (_) {}
-    try {
-      File('${settingsPath}.json').writeAsStringSync(jsonEncode({
-        'terminals': [for (final e in order) {'o': e.value.orderNum, 'tid': e.key, 'row': e.value.excelRow, 'name': e.value.unitName}],
-        'hints': [for (final h in nameHints) {'row': h.value, 'kws': h.key}],
-        'merchants': merchantCodeMap, 'fixes': tidFix,
-      }));
-    } catch (_) {}
-    final bytes = excel.save();
-    if (bytes == null) return false;
-    f.writeAsBytesSync(bytes);
-    return true;
-  } catch (e) {
-    _dbg('settings save error: $e');
-    return false;
   }
+  return [lines];
 }
 
-List<int>? _blankTemplateBytes() {
-  try {
-    final e = ex.Excel.createExcel();
-    final name = e.getDefaultSheet() ?? 'Sheet1';
-    e.appendRow(name, <ex.CellValue?>[
-      null, ex.TextCellValue('الوحدة'), ex.TextCellValue('عدد الماكينات'), ex.TextCellValue('المبلغ'), ex.TextCellValue('كاش'), ex.TextCellValue('الإجمالي'),
-    ]);
-    return e.save();
-  } catch (_) {
-    return null;
+// ───────────── المبالغ ─────────────
+final RegExp _amountRe =
+    RegExp(r"(?<![\d,.])(\d{1,3}(?:,\d{3})*|\d+)[., ](\d{2})(?!\d)");
+final RegExp _brandRe = RegExp(
+    r"\b(VISA|MASTER(?:CARD)?|MEZZA|MEEZA|MEZA|MEZZ4|MEZZ)\b",
+    caseSensitive: false);
+
+List<double> amountsIn(String rawText) {
+  final text = rawText.replaceAllMapped(
+      RegExp(r'\bB(\d{2,3}[.,]\d{2})\b'), (m) => '8${m.group(1)}');
+  final out = <double>[];
+  for (final m in _amountRe.allMatches(text)) {
+    final v = double.tryParse("${m.group(1)!.replaceAll(',', '')}.${m.group(2)!}");
+    if (v != null && v >= 0.5 && v <= 5000000) out.add(round2(v));
   }
+  return out;
+}
+
+MapEntry<T, int>? mostCommon<T>(List<T> vals) {
+  if (vals.isEmpty) return null;
+  final counts = <T, int>{};
+  for (final v in vals) {
+    counts[v] = (counts[v] ?? 0) + 1;
+  }
+  MapEntry<T, int>? best;
+  for (final e in counts.entries) {
+    if (best == null || e.value > best.value) best = e;
+  }
+  return best;
+}
+
+class Parsed {
+  final List<double> grand;
+  final double? bsum;
+  final List<double> bvals;
+  Parsed(this.grand, this.bsum, this.bvals);
+}
+
+Parsed parseReceipt(String txt) {
+  final t = txt
+      .split(RegExp(r"THANK\s*YOU|Hotline|App\s*Version", caseSensitive: false))
+      .first;
+  final gm = RegExp(r"GRAND|TOTALS", caseSensitive: false).firstMatch(t);
+  var pre = gm != null ? t.substring(0, gm.start) : t;
+  final post = gm != null ? t.substring(gm.start) : "";
+
+  final bms = _brandRe.allMatches(pre).toList();
+  final sections = <String>[];
+  if (bms.isNotEmpty) {
+    for (var i = 0; i < bms.length; i++) {
+      final end = i + 1 < bms.length ? bms[i + 1].start : pre.length;
+      sections.add(pre.substring(bms[i].end, end));
+    }
+  } else {
+    final sm =
+        RegExp(r"SUCCESSFULL?Y|CLOSED", caseSensitive: false).firstMatch(pre);
+    if (sm != null) pre = pre.substring(sm.end);
+    sections.add(pre);
+  }
+
+  final bvals = <double>[];
+  for (final sec in sections) {
+    final mc = mostCommon(amountsIn(sec));
+    if (mc != null) bvals.add(mc.key);
+  }
+  final grand = amountsIn(post);
+  final bsum = bvals.isNotEmpty ? round2(bvals.reduce((a, b) => a + b)) : null;
+  return Parsed(grand, bsum, bvals);
+}
+
+class Decision {
+  final double val;
+  final bool ok;
+  Decision(this.val, this.ok);
+}
+
+Decision decide(List<Parsed> results) {
+  // 1) تطابق تام بين مجموع الكروت و GRAND TOTALS
+  for (final r in results) {
+    final b = r.bsum;
+    if (b != null && b > 0 && r.grand.any((g) => (g - b).abs() < 0.005)) {
+      return Decision(b, true);
+    }
+  }
+  // 2) فرق رقم واحد
+  for (final r in results) {
+    final b = r.bsum;
+    if (b != null && b > 0 && r.bvals.length >= 2) {
+      for (final g in r.grand) {
+        final sa = g.toStringAsFixed(2), sb = b.toStringAsFixed(2);
+        if (sa.length == sb.length) {
+          var diff = 0;
+          for (var i = 0; i < sa.length; i++) {
+            if (sa[i] != sb[i]) diff++;
+          }
+          if (diff == 1) return Decision(b, true);
+        }
+      }
+    }
+  }
+  // 3) إجمالي مكرر
+  for (final r in results) {
+    final c = mostCommon(r.grand);
+    if (c != null && c.value >= 2 && r.bsum == null) return Decision(c.key, false);
+  }
+  // 4) تصويت
+  final pool = <double>[];
+  for (final r in results) {
+    pool.addAll(r.grand);
+    final b = r.bsum;
+    if (b != null && b > 0) pool.add(b);
+  }
+  final c = mostCommon(pool);
+  if (c != null) return Decision(c.key, false);
+  return Decision(0.0, false);
+}
+
+class PieceResult {
+  final List<String> texts;
+  final double val;
+  final bool ok;
+  PieceResult(this.texts, this.val, this.ok);
+}
+
+// إيصال دفع (RRN / رقم كارت مخفي / Approved ...) ولا باتش كلوز / ملخص / ري برنت؟
+String classifyReceipt(String text) {
+  final up = text.toUpperCase();
+  final payRes = <RegExp>[
+    RegExp(r'R{1,2}N\W{0,3}\d{9,}'),
+    RegExp(r'\d{4,6}\W{0,2}\*{3,}\W{0,2}\d{4}'),
+    RegExp(r'APPROVED'),
+    RegExp(r'AUTH\W{0,3}\d{6}'),
+    RegExp(r'I\s*AUTHORI[SZ]E'),
+    RegExp(r'MERCHANT\s*COPY'),
+    RegExp(r'CLESS|CHIP\s*ONLINE'),
+  ];
+  final batchRes = <RegExp>[
+    RegExp(r'BATCH\s*CLOS'),
+    RegExp(r'SUCCESSF'),
+    RegExp(r'GRAND\s*TOTAL'),
+    RegExp(r'TOTAL\s*NET'),
+    RegExp(r'THANK\s*YOU'),
+    RegExp(r'NBE\s*NETWORK'),
+    RegExp(r'HOTLINE'),
+  ];
+  final pay = payRes.where((r) => r.hasMatch(up)).length;
+  final batch = batchRes.where((r) => r.hasMatch(up)).length;
+  if (pay >= 2 && batch < 2) return 'payment';
+  if (batch >= 1) return 'batch';
+  return 'other';
+}
+
+// لو GRAND TOTAL = مجموع إجماليات الكروت (حتى لو أسماء الكروت اتقرت غلط): نرجّعه مؤكد.
+double? sumClosure(List<String> texts) {
+  final cnt = <double, int>{};
+  for (final t in texts) {
+    final tt = t
+        .split(RegExp(r'THANK\s*YOU|Hotline|App\s*Version', caseSensitive: false))
+        .first;
+    final local = <double, int>{};
+    for (final a in amountsIn(tt)) {
+      local[a] = (local[a] ?? 0) + 1;
+    }
+    local.forEach((k, v) {
+      if (v > (cnt[k] ?? 0)) cnt[k] = v;
+    });
+  }
+  final c = cnt.entries.where((e) => e.value >= 2).map((e) => e.key).toList()..sort();
+  if (c.length < 3 || c.length > 14) return null;
+  for (var gi = c.length - 1; gi >= 2; gi--) {
+    final g = c[gi];
+    final others = c.sublist(0, gi);
+    final n = others.length;
+    for (var mask = 1; mask < (1 << n); mask++) {
+      var bits = 0, sum = 0.0;
+      for (var i = 0; i < n; i++) {
+        if (mask & (1 << i) != 0) {
+          bits++;
+          sum += others[i];
+        }
+      }
+      if (bits >= 2 && (sum - g).abs() < 0.005) return g;
+    }
+  }
+  return null;
+}
+
+PieceResult ocrPiece(List<OcrLine> lines) {
+  final texts = <String>[rowsText(lines), readingText(lines)];
+  final sc = sumClosure(texts);
+  if (sc != null) return PieceResult(texts, sc, true);
+  final d = decide(texts.map(parseReceipt).toList());
+  return PieceResult(texts, d.val, d.ok);
+}
+
+String? batchNo(List<String> texts) {
+  final reg = RegExp(r"BATCH\s*NO\D{0,6}(\d{4,7})", caseSensitive: false);
+  final all = <String>[];
+  for (final t in texts) {
+    for (final m in reg.allMatches(t)) {
+      all.add(m.group(1)!);
+    }
+  }
+  return mostCommon(all)?.key;
+}
+
+// ───────────── الماكينة / الوحدة / التاريخ ─────────────
+String? _tidLabeledRaw(String t) {
+  final m = RegExp(r"TERMINAL\s*(?:ID)?\D{0,15}?(\d[\d\s/]{6,13}\d)",
+          caseSensitive: false)
+      .firstMatch(t);
+  if (m == null) return null;
+  final raw = m.group(1)!.replaceAll('/', '7').replaceAll(RegExp(r'\D'), '');
+  // رقم الترمنل 8 أرقام. أي رقم أطول (زي MERCHANT ID اللي OCR أحياناً يحطه جنب TERMINAL) بنتجاهله
+  if (raw.length < 8 || raw.length > 9 || raw.startsWith('0011')) return null;
+  final d = raw.substring(raw.length - 8);
+  return tidFix[d] ?? d;
+}
+String? _tidLabeled(String t) {
+  final d = _tidLabeledRaw(t);
+  return d != null && terminals.containsKey(d) ? d : null;
+}
+
+// ───────────── تعلّم الماكينات والوحدات من الإيصالات ─────────────
+int _editDistance(String a, String b) {
+  if (a == b) return 0;
+  if (a.isEmpty) return b.length;
+  if (b.isEmpty) return a.length;
+  var prev = List<int>.generate(b.length + 1, (i) => i);
+  for (var i = 1; i <= a.length; i++) {
+    final cur = List<int>.filled(b.length + 1, 0);
+    cur[0] = i;
+    for (var j = 1; j <= b.length; j++) {
+      final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+      cur[j] = math.min(math.min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+String _normUnit(String s) => s.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9\u0600-\u06FF]'), '');
+
+String? _cleanUnitName(String raw) {
+  final s = raw
+      .replaceAll(RegExp(r'[^A-Za-z0-9\u0600-\u06FF \-]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  final letters = RegExp(r'[A-Za-z\u0600-\u06FF]').allMatches(s).length;
+  final digits = RegExp(r'\d').allMatches(s).length;
+  if (letters < 4 || digits > letters) return null;
+  return s.length > 40 ? s.substring(0, 40).trim() : s;
+}
+
+// اسم الوحدة المكتوب على الإيصال: بعد كلمة MERCHANT NAME لو موجودة، وإلا أول سطر اسم في أعلى الإيصال
+String? extractUnitName(List<String> texts) {
+  final label = RegExp(r'MERCHANT\s*NAME\s*[:\-]?\s*(.+)', caseSensitive: false);
+  for (final t in texts) {
+    for (final l in t.split('\n')) {
+      final m = label.firstMatch(l.trim());
+      if (m != null) {
+        final n = _cleanUnitName(m.group(1)!);
+        if (n != null) return n;
+      }
+    }
+  }
+  // إيصالات NBE: اسم الوحدة بيبقى سطر بالشكل "EC <الاسم> TRF" (حتى لو OCR دمجه مع سطر تاني)
+  final ecRe = RegExp(r'\bE\s?C\s+([A-Z0-9][A-Z0-9 \-]{2,40}?)\s+TR[FE]\b');
+  final ecFound = <String>[];
+  for (final t in texts) {
+    for (final l in t.split('\n')) {
+      final m = ecRe.firstMatch(l.toUpperCase());
+      if (m != null) {
+        final n = _cleanUnitName('EC ${m.group(1)!.trim()} TRF');
+        if (n != null) ecFound.add(n);
+      }
+    }
+  }
+  final ecBest = mostCommon(ecFound)?.key;
+  if (ecBest != null) return ecBest;
+  final skip = RegExp(
+      r'NATIONAL|BANK|\bNBE\b|EGYPT|RECEIPT|CUSTOMER|COPY|MERCHANT|TERMINAL|BATCH|DATE|TIME|SALE|TOTAL|AMOUNT|VISA|MASTER|MEEZ|THANK|SUCCESS|CLOSED|CARD|APPROVAL|\bRRN\b|TRACE|VERSION|GRAND|REPORT|SETTLEMENT|\bST\b|STREET|ALEX|CAIRO|\b02F\b|INSIDE|NEXT\s*TO|\bFRON',
+      caseSensitive: false);
+  // اسم الوحدة بيبقى تحت سطر "NATIONAL BANK OF EGYPT" على طول (قبل سطر العنوان)
+  final bankLine = RegExp(r'BANK\s*OF\s*EGYPT|NATIONAL\s*BANK|^\s*NBE\s*$', caseSensitive: false);
+  for (final t in texts) {
+    final ls = t.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    for (var i = 0; i < ls.length; i++) {
+      if (!bankLine.hasMatch(ls[i])) continue;
+      for (var j = i + 1; j < ls.length && j <= i + 3; j++) {
+        if (skip.hasMatch(ls[j])) continue;
+        final n = _cleanUnitName(ls[j]);
+        if (n != null) return n;
+      }
+      break;
+    }
+  }
+  for (final t in texts) {
+    var seen = 0;
+    for (final raw in t.split('\n')) {
+      final l = raw.trim();
+      if (l.isEmpty) continue;
+      if (++seen > 8) break;
+      if (skip.hasMatch(l)) continue;
+      final n = _cleanUnitName(l);
+      if (n != null) return n;
+    }
+  }
+  return null;
+}
+
+int _rowForUnitName(String name) {
+  final k = _normUnit(name);
+  for (final e in rowNames.entries) {
+    final o = _normUnit(e.value);
+    if (o == k) return e.key;
+    final mx = math.max(o.length, k.length);
+    if (mx >= 6 && _editDistance(o, k) <= (mx * 0.15).floor()) return e.key;
+  }
+  var mxRow = 1;
+  for (final r in rowNames.keys) {
+    if (r > mxRow) mxRow = r;
+  }
+  return mxRow + 1;
+}
+
+// الـ MERCHANT ID المكتوب على الإيصال (الأكتر تكراراً بين القراءات)
+String? extractMerchantId(List<String> texts) {
+  final found = <String>[];
+  final re = RegExp(r"MERCHANT\s*(?:ID|10|NO)\D{0,15}?(\d[\d\s/]{6,16}\d)", caseSensitive: false);
+  for (final t in texts) {
+    for (final m in re.allMatches(t)) {
+      final d = m.group(1)!.replaceAll('/', '7').replaceAll(RegExp(r'\D'), '');
+      if (d.length >= 8 && d.length <= 16) found.add(d);
+    }
+  }
+  return mostCommon(found)?.key;
+}
+
+// لو الـ MERCHANT ID ده متسجل قبل كده (أو قريب جداً منه بفرق رقم واحد من غلط القراءة) بنرجّع صف وحدته
+int? _rowForMerchant(String mid) {
+  final exact = merchantCodeMap[mid];
+  if (exact != null) return exact;
+  for (final e in merchantCodeMap.entries) {
+    final k = e.key;
+    // مفيش مطابقة تقريبية: أكواد التجار بتاعة الوحدات بتختلف في رقم واحد بس (…029084 / …026084 / …022084)
+    if (k.length >= 10 && mid.length > k.length && mid.contains(k)) return e.value;
+  }
+  return null;
+}
+
+// ماكينة معروفة بس الـ MERCHANT ID بتاعها لسه مش متسجل: بنسجّله علشان الماكينات الجاية بنفس الكود تدخل نفس الوحدة
+void learnMerchant(String tid, List<String> texts) {
+  final t = terminals[tid];
+  if (t == null) return;
+  final mid = extractMerchantId(texts);
+  if (mid == null || _rowForMerchant(mid) != null) return;
+  merchantCodeMap[mid] = t.excelRow;
+  saveSettingsToExcel();
 }
 
 String? discoverTerminal(List<String> texts) {
