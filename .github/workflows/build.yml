@@ -72,7 +72,7 @@ jobs:
           cp main.dart app/lib/main.dart
           cd app
           flutter pub add google_mlkit_text_recognition permission_handler pdf "archive:^3.6.1" share_plus image printing shared_preferences file_picker excel
-          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>\n    <queries><intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="vnd.android.document/directory"/></intent><intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="resource/folder"/></intent></queries>\n    <application|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>\n    <queries><intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="vnd.android.document/directory"/></intent><intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="resource/folder"/></intent></queries>\n    <application|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<application|<application android:largeHeap=\"true\"|' android/app/src/main/AndroidManifest.xml
           sed -i -E 's/^( *)compileSdk *=.*/\1compileSdk = 37/' android/app/build.gradle.kts
           printf '%s\n' '-dontwarn com.google.mlkit.vision.text.**' '-keep class com.google.mlkit.** { *; }' '-keep class com.google.android.gms.internal.mlkit_vision_text_common.** { *; }' '-keep class com.google.android.gms.internal.mlkit_vision_text_bundled_common.** { *; }' > android/app/proguard-rules.pro
@@ -140,6 +140,29 @@ jobs:
                               "shareToWhatsApp" -> result.success(shareToWhatsApp(call.argument<List<String>>("paths") ?: emptyList(), call.argument<String>("text") ?: ""))
                               "pickHandlers" -> result.success(pickHandlers(call.argument<String>("mime") ?: "*/*"))
                               "pickWith" -> pickWith(call.argument<String>("mime") ?: "*/*", call.argument<String>("pkg") ?: "", call.argument<String>("cls") ?: "", result)
+                              "keepScreenOn" -> {
+                                  val on = call.argument<Boolean>("on") ?: false
+                                  runOnUiThread {
+                                      if (on) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                                      else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                                  }
+                                  result.success(true)
+                              }
+                              "moveToBack" -> { moveTaskToBack(true); result.success(true) }
+                              "batteryExempt" -> {
+                                  val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                                  result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                              }
+                              "requestBatteryExempt" -> {
+                                  try {
+                                      val bi = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                                      bi.data = Uri.parse("package:" + packageName)
+                                      startActivity(bi)
+                                  } catch (e: Exception) {}
+                                  result.success(true)
+                              }
+                              "folderPickHandlers" -> result.success(folderPickHandlers())
+                              "pickFolderWith" -> pickFolderWith(call.argument<String>("pkg") ?: "", call.argument<String>("cls") ?: "", result)
                               else -> result.notImplemented()
                           }
                       }
@@ -244,7 +267,55 @@ jobs:
                   } catch (e: Exception) { return null }
               }
 
+              private var pendingFolder: MethodChannel.Result? = null
+
+              private fun folderPickHandlers(): List<HashMap<String, String>> {
+                  val res = ArrayList<HashMap<String, String>>()
+                  val seen = HashSet<String>()
+                  val fi = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                  for (ri in packageManager.queryIntentActivities(fi, android.content.pm.PackageManager.MATCH_ALL)) {
+                      val key = ri.activityInfo.packageName + "|" + ri.activityInfo.name
+                      if (!seen.add(key)) continue
+                      val m = HashMap<String, String>()
+                      m["label"] = ri.loadLabel(packageManager).toString()
+                      m["pkg"] = ri.activityInfo.packageName
+                      m["cls"] = ri.activityInfo.name
+                      m["kind"] = "tree"
+                      m["icon"] = drawableToB64(ri.loadIcon(packageManager)) ?: ""
+                      res.add(m)
+                  }
+                  return res
+              }
+
+              private fun pickFolderWith(pkg: String, cls: String, result: MethodChannel.Result) {
+                  pendingFolder?.let { try { it.success("") } catch (e: Exception) {} }
+                  pendingFolder = null
+                  val fi = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                  if (pkg.isNotEmpty()) fi.setClassName(pkg, cls)
+                  try {
+                      pendingFolder = result
+                      startActivityForResult(fi, 7312)
+                  } catch (e: Exception) {
+                      pendingFolder = null
+                      result.success("?")
+                  }
+              }
+
               override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  if (requestCode == 7312) {
+                      val fr = pendingFolder
+                      pendingFolder = null
+                      if (fr == null) return
+                      var fpath = ""
+                      val tree = data?.data
+                      if (resultCode == android.app.Activity.RESULT_OK && tree != null) {
+                          val id = DocumentsContract.getTreeDocumentId(tree)
+                          fpath = if (id.startsWith("primary:")) "/storage/emulated/0/" + id.substring(8)
+                                  else if (id == "primary") "/storage/emulated/0" else "?"
+                      }
+                      fr.success(fpath)
+                      return
+                  }
                   if (requestCode != 7311) {
                       super.onActivityResult(requestCode, resultCode, data)
                       return
