@@ -2101,7 +2101,79 @@ void learnMerchant(String tid, List<String> texts) {
 }
 
 // ماكينة جديدة مكتوبة على الإيصال (Terminal ID) ومش في القايمة: بنسجّلها هي ووحدتها وبنحفظها في ملف الإعدادات
-String? discoverTerminal(List<String> texts) {
+// كل قراءات TERMINAL ID الموجودة في النص (مش أول واحدة بس)
+List<String> _tidLabeledAll(String t) {
+  final out = <String>[];
+  for (final m in RegExp(r"TERMINAL\s*(?:ID)?\D{0,15}?(\d[\d\s/]{6,13}\d)", caseSensitive: false).allMatches(t)) {
+    final raw = m.group(1)!.replaceAll('/', '7').replaceAll(RegExp(r'\D'), '');
+    if (raw.length < 8 || raw.length > 9 || raw.startsWith('0011')) continue;
+    final d = raw.substring(raw.length - 8);
+    out.add(tidFix[d] ?? d);
+  }
+  return out;
+}
+
+final Set<String> _learnedThisRun = <String>{}; // ماكينات اتسجلت في الفحص الحالي
+
+int _digitDiff(String a, String b) {
+  if (a.length != b.length) return 99;
+  var d = 0;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) d++;
+  }
+  return d;
+}
+
+int? _existingRowForName(String name) {
+  final k = _normUnit(name);
+  for (final e in rowNames.entries) {
+    final o = _normUnit(e.value);
+    if (o == k) return e.key;
+    final mx = math.max(o.length, k.length);
+    if (mx >= 6 && _editDistance(o, k) <= (mx * 0.15).floor()) return e.key;
+  }
+  return null;
+}
+
+// تعلّم "حذر" من إيصالات الدفع: ماكينة جديدة بس لو رقمها اتقرا مرتين على الأقل، ووحدتها معروفة أصلاً
+// (من الباتشات أو من ملف الإعدادات)، ومش غلطة رقم واحد من ماكينة معروفة. غير كده بنسيبها من غير ما نخترع ماكينة.
+String? _discoverTerminalStrict(List<String> texts) {
+  final counts = <String, int>{};
+  for (final t in texts) {
+    for (final d in _tidLabeledAll(t)) {
+      counts[d] = (counts[d] ?? 0) + 1;
+    }
+  }
+  if (counts.isEmpty) return null;
+  final best = counts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+  final tid = best.key;
+  if (terminals.containsKey(tid)) return tid;
+  for (final k in terminals.keys) {
+    if (_digitDiff(k, tid) <= 1) return k; // غلطة قراءة رقم واحد: هي الماكينة المعروفة
+  }
+  if (best.value < 2) return null;
+  final mid = extractMerchantId(texts);
+  final uname = extractUnitName(texts) ?? 'Unit $tid';
+  var row = _existingRowForName(uname);
+  row ??= mid == null ? null : _rowForMerchant(mid);
+  // وحدة جديدة خالص: بس لو رقم الترمنل اتقرا كذا مرة (ملف الدفع فيه عشرات الإيصالات، فالغلطة العابرة ما بتكررش)
+  if (row == null) {
+    if (best.value < 5) return null;
+    row = _rowForUnitName(uname);
+  }
+  var order = 0;
+  for (final x in terminals.values) {
+    if (x.orderNum > order) order = x.orderNum;
+  }
+  terminals[tid] = TerminalInfo(order + 1, row, rowNames[row] ?? uname);
+  rebuildTerminalIndexes();
+  saveSettingsToExcel();
+  _dbg('NEW TERMINAL (إيصالات الدفع) $tid -> ${terminals[tid]!.unitName} (ماكينة ${order + 1})');
+  return tid;
+}
+
+String? discoverTerminal(List<String> texts, {bool strict = false}) {
+  if (strict) return _discoverTerminalStrict(texts);
   final counts = <String, int>{};
   final midNow = extractMerchantId(texts);
   bool inMerchant(String d) => midNow != null && midNow.contains(d);
@@ -2110,28 +2182,44 @@ String? discoverTerminal(List<String> texts) {
     if (d != null && !inMerchant(d)) counts[d] = (counts[d] ?? 0) + 1;
   }
   if (counts.isEmpty) {
-    // لو الـ OCR لخبط ترتيب الأسطر: رقم من 8 أرقام بيبدأ بـ 50 واقف لوحده
+    // لو الـ OCR لخبط ترتيب الأسطر: رقم من 8 أرقام واقف لوحده (مش تاريخ ولا جزء من MERCHANT ID)
     for (final t in texts) {
-      for (final m in RegExp(r'(?<!\d)(50\d{6})(?!\d)').allMatches(t)) {
-        final d = tidFix[m.group(1)!] ?? m.group(1)!;
+      for (final m in RegExp(r'(?<!\d)(\d{8})(?!\d)').allMatches(t)) {
+        final raw = m.group(1)!;
+        if (raw.startsWith('20') || raw.startsWith('19') || raw.startsWith('00')) continue;
+        final d = tidFix[raw] ?? raw;
         if (!inMerchant(d)) counts[d] = (counts[d] ?? 0) + 1;
       }
     }
   }
   if (counts.isEmpty) return null;
-  final tid = counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+  // قراءتين مختلفتين بنفس القوة = مش متأكدين: الأفضل نسيبها للمراجعة بدل ما نسجّل ماكينة غلط
+  final ranked = counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+  if (ranked.length > 1 && ranked[0].value == ranked[1].value && !terminals.containsKey(ranked[0].key) && !terminals.containsKey(ranked[1].key)) {
+    return null;
+  }
+  var tid = ranked.first.key;
+  if (!terminals.containsKey(tid)) {
+    for (final k in terminals.keys) {
+      if (_digitDiff(k, tid) <= 1) return k; // غلطة قراءة رقم واحد من ماكينة معروفة
+    }
+  }
   if (terminals.containsKey(tid)) return tid;
   final name = extractUnitName(texts) ?? 'Unit $tid';
   // ماكينات بترمنل مختلف لكن نفس الـ MERCHANT ID = نفس الوحدة: بتتحسب مع بعض في صف واحد
   final mid = extractMerchantId(texts);
   final byMerchant = mid == null ? null : _rowForMerchant(mid);
-  final row = byMerchant ?? _rowForUnitName(name);
+  // الاسم المطبوع على الإيصال أدق من كود التاجر (كود التاجر ممكن يتقرا غلط ويلخبط الوحدات)
+  final byName = _existingRowForName(name);
+  final row = byName ?? byMerchant ?? _rowForUnitName(name);
   var order = 0;
   for (final t in terminals.values) {
     if (t.orderNum > order) order = t.orderNum;
   }
   terminals[tid] = TerminalInfo(order + 1, row, rowNames[row] ?? name);
   if (mid != null && byMerchant == null) merchantCodeMap[mid] = row;
+  _learnedThisRun.add(tid);
+  _dbg('NEW TERMINAL (باتشات) $tid -> ${rowNames[row] ?? name} (ماكينة ${order + 1})');
   rebuildTerminalIndexes();
   saveSettingsToExcel();
   return tid;
@@ -4903,6 +4991,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     ];
     writeReport(reportDate);
 
+    // أول مرة: اعرض الماكينات اللي اتسجلت بترتيب الصفحات علشان تتأكد منها
+    if (_learnedThisRun.isNotEmpty) {
+      final ms = terminals.entries.toList()..sort((a, b) => a.value.orderNum.compareTo(b.value.orderNum));
+      sourceNote += '\n• الماكينات المسجلة (بترتيب الملف): ' +
+          ms.map((e) => '${e.value.orderNum}) ${e.value.unitName} ${e.key}').join(' ، ') +
+          '\n  (تقدر تعدّلها من: ⋮ ← إعدادات الماكينات)';
+    }
+    final unresolved = mainItems.where((e) => e.amount > 0 && e.orderNum == null).length;
+    if (unresolved > 0 && _learnedThisRun.isNotEmpty) {
+      sourceNote += '\n⚠️ $unresolved باتش مقدرتش أعرف ماكينته (رقم الترمنل مش واضح). حدّد ماكينتهم من المراجعة وهتتسجل.';
+    }
+
     setState(() => status = 'اكتمل العد: ${_countLine()}\n'
         '$xlsxLine\n'
         '• تم توليد ملف الـ PDF المجمع.' +
@@ -5049,6 +5149,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       return;
     }
     await prepareDefaultFiles();
+    _learnedThisRun.clear();
 
     setState(() {
       busy = true;
@@ -6612,7 +6713,7 @@ class MCollector {
     }
     r.tid = tc.isNotEmpty
         ? tc.entries.reduce((a, b) => a.value >= b.value ? a : b).key
-        : (findTerminalIn([all]) ?? discoverTerminal([all]));
+        : (findTerminalIn([all]) ?? discoverTerminal([all], strict: true));
 
     // اليوم الأغلب + الإيصالات اللي مش تبع نفس اليوم
     if (days.isEmpty) {
@@ -6868,7 +6969,7 @@ MIdent _identify(String all) {
   }
   r.tid = tc.isNotEmpty
       ? tc.entries.reduce((a, b) => a.value >= b.value ? a : b).key
-      : (findTerminalIn([all]) ?? discoverTerminal([all]));
+      : (findTerminalIn([all]) ?? discoverTerminal([all], strict: true));
   final days = <String, int>{};
   for (final m in _dateRe.allMatches(all)) {
     final k = _dayKey(m.group(0)!);
@@ -9265,6 +9366,93 @@ int _fileStamp(File f) {
   }
 }
 
+// قارئ xlsx بسيط وثابت (بيقرا الشيتات كنصوص) علشان أي ملف إعدادات يتقرا حتى لو اتحفظ من Excel / WPS
+String _xmlUnesc(String s) => s
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&apos;', "'")
+    .replaceAll('&amp;', '&');
+
+Map<String, List<List<String>>> _readXlsxSheets(List<int> bytes) {
+  final arc = ZipDecoder().decodeBytes(bytes);
+  String? text(String n) {
+    for (final f in arc.files) {
+      if (f.isFile && f.name == n) return utf8.decode(f.content as List<int>, allowMalformed: true);
+    }
+    return null;
+  }
+
+  final shared = <String>[];
+  final ss = text('xl/sharedStrings.xml');
+  if (ss != null) {
+    for (final si in RegExp(r'<si\b[^>]*?(?:/>|>.*?</si>)', dotAll: true).allMatches(ss)) {
+      final sb = StringBuffer();
+      for (final tm in RegExp(r'<t\b[^>]*?>(.*?)</t>', dotAll: true).allMatches(si.group(0)!)) {
+        sb.write(_xmlUnesc(tm.group(1)!));
+      }
+      shared.add(sb.toString());
+    }
+  }
+  final wb = text('xl/workbook.xml') ?? '';
+  final rels = text('xl/_rels/workbook.xml.rels') ?? '';
+  final relTarget = <String, String>{};
+  for (final m in RegExp(r'<Relationship\b[^>]*>').allMatches(rels)) {
+    final tag = m.group(0)!;
+    final id = RegExp(r'\bId="([^"]+)"').firstMatch(tag)?.group(1);
+    final tg = RegExp(r'\bTarget="([^"]+)"').firstMatch(tag)?.group(1);
+    if (id != null && tg != null) relTarget[id] = tg.startsWith('/') ? tg.substring(1) : 'xl/$tg';
+  }
+  final out = <String, List<List<String>>>{};
+  for (final sm in RegExp(r'<sheet\b[^>]*>').allMatches(wb)) {
+    final tag = sm.group(0)!;
+    final name = _xmlUnesc(RegExp(r'\bname="([^"]*)"').firstMatch(tag)?.group(1) ?? '');
+    final rid = RegExp(r'\br:id="([^"]+)"').firstMatch(tag)?.group(1);
+    final path = rid == null ? null : relTarget[rid];
+    final xml = path == null ? null : text(path);
+    if (xml == null || name.isEmpty) continue;
+    final rows = <List<String>>[];
+    for (final rm in RegExp(r'<row\b[^>]*?(?:/>|>.*?</row>)', dotAll: true).allMatches(xml)) {
+      final row = <String>[];
+      for (final cm in RegExp(r'<c\b[^>]*?(?:/>|>.*?</c>)', dotAll: true).allMatches(rm.group(0)!)) {
+        final cell = cm.group(0)!;
+        final open = RegExp(r'<c\b[^>]*?/?>').firstMatch(cell)!.group(0)!;
+        final ref = RegExp(r'\br="([A-Z]+)\d+"').firstMatch(open)?.group(1);
+        final ty = RegExp(r'\bt="([^"]*)"').firstMatch(open)?.group(1);
+        var v = '';
+        if (ty == 'inlineStr') {
+          final sb = StringBuffer();
+          for (final tm in RegExp(r'<t\b[^>]*?>(.*?)</t>', dotAll: true).allMatches(cell)) {
+            sb.write(_xmlUnesc(tm.group(1)!));
+          }
+          v = sb.toString();
+        } else {
+          final vm = RegExp(r'<v>(.*?)</v>', dotAll: true).firstMatch(cell);
+          if (vm != null) {
+            v = _xmlUnesc(vm.group(1)!);
+            if (ty == 's') {
+              final k = int.tryParse(v.trim());
+              v = (k != null && k >= 0 && k < shared.length) ? shared[k] : '';
+            }
+          }
+        }
+        v = v.trim();
+        if (RegExp(r'^\d+\.0+$').hasMatch(v)) v = v.substring(0, v.indexOf('.'));
+        final ci = ref == null ? row.length : _colNum(ref) - 1;
+        while (row.length <= ci) {
+          row.add('');
+        }
+        row[ci] = v;
+      }
+      rows.add(row);
+    }
+    out[name] = rows;
+  }
+  return out;
+}
+
+int? _intOfStr(String s) => int.tryParse(s) ?? double.tryParse(s)?.toInt();
+
 Future<void> loadSettingsFromExcel({bool force = false}) async {
   try {
     final f = File(settingsPath);
@@ -9278,21 +9466,21 @@ Future<void> loadSettingsFromExcel({bool force = false}) async {
       rebuildTerminalIndexes();
       return;
     }
-    final excel = ex.Excel.decodeBytes(f.readAsBytesSync());
-
-    List<List<ex.Data?>> rowsOf(String name) {
-      final sh = excel.tables[name];
-      if (sh == null || sh.maxRows < 2) return <List<ex.Data?>>[];
-      return sh.rows.skip(1).toList();
+    final sheets = _readXlsxSheets(f.readAsBytesSync());
+    List<List<String>> rowsOf(String name) {
+      final sh = sheets[name];
+      if (sh == null || sh.length < 2) return <List<String>>[];
+      return sh.skip(1).toList();
     }
+
+    String cell(List<String> r, int i) => i < r.length ? r[i] : '';
 
     final newTerms = <String, TerminalInfo>{};
     for (final r in rowsOf('Terminals')) {
-      if (r.length < 3) continue;
-      final order = _cellInt(r[0]);
-      final tid = _cellText(r[1]);
-      final xlRow = _cellInt(r[2]);
-      var name = r.length > 3 ? _cellText(r[3]) : '';
+      final order = _intOfStr(cell(r, 0));
+      final tid = cell(r, 1);
+      final xlRow = _intOfStr(cell(r, 2));
+      var name = cell(r, 3);
       if (order == null || tid.isEmpty || xlRow == null) continue;
       if (name.isEmpty) name = 'وحدة $xlRow';
       newTerms[tid] = TerminalInfo(order, xlRow, name);
@@ -9300,9 +9488,8 @@ Future<void> loadSettingsFromExcel({bool force = false}) async {
 
     final newHints = <MapEntry<List<String>, int>>[];
     for (final r in rowsOf('Name_Hints')) {
-      if (r.length < 2) continue;
-      final row = _cellInt(r[0]);
-      final kws = _cellText(r[1])
+      final row = _intOfStr(cell(r, 0));
+      final kws = cell(r, 1)
           .split(RegExp(r'[,;،|]'))
           .map((e) => e.trim().toUpperCase())
           .where((e) => e.isNotEmpty)
@@ -9312,18 +9499,23 @@ Future<void> loadSettingsFromExcel({bool force = false}) async {
 
     final newMerch = <String, int>{};
     for (final r in rowsOf('Merchant_Codes')) {
-      if (r.length < 2) continue;
-      final code = _cellText(r[0]);
-      final row = _cellInt(r[1]);
+      final code = cell(r, 0);
+      final row = _intOfStr(cell(r, 1));
       if (code.isNotEmpty && row != null) newMerch[code] = row;
     }
 
     final newFix = <String, String>{};
     for (final r in rowsOf('TID_Fixes')) {
-      if (r.length < 2) continue;
-      final wrong = _cellText(r[0]);
-      final right = _cellText(r[1]);
+      final wrong = cell(r, 0);
+      final right = cell(r, 1);
       if (wrong.isNotEmpty && right.isNotEmpty) newFix[wrong] = right;
+    }
+
+    // لو الشيت مفيهوش ماكينات وفي نسخة JSON محفوظة (من تعلّم سابق) نستخدمها
+    if (newTerms.isEmpty && File('${settingsPath}.json').existsSync()) {
+      _loadSettingsFromJson();
+      _settingsStamp = _fileStamp(f);
+      return;
     }
 
     terminals
@@ -9338,7 +9530,6 @@ Future<void> loadSettingsFromExcel({bool force = false}) async {
     tidFix
       ..clear()
       ..addAll(newFix);
-    // ترمنلات وهمية اتسجلت غلط من الـ MERCHANT ID (رقمها جزء من كود تاجر): بنشيلها
     terminals.removeWhere((tid, _) =>
         tid.length == 8 && merchantCodeMap.keys.any((k) => k.length >= 10 && k.contains(tid)));
     rebuildTerminalIndexes();
