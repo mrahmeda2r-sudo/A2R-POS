@@ -2113,6 +2113,25 @@ List<String> _tidLabeledAll(String t) {
   return out;
 }
 
+// أرقام الترمنل في نفس البنك بتختلف أحياناً في رقم واحد بس (50382306 / 50382308)، فمينفعش نعتبر الفرق ده غلطة قراءة.
+// نعتبره غلطة بس لو اسم الوحدة المطبوع على الإيصال هو نفس وحدة الماكينة المعروفة.
+// بيرجّع: رقم الماكينة المعروفة (نفس الماكينة)، أو '?' (مش قادر أحدد)، أو '' (ماكينة مختلفة فعلاً)
+String _nearKnown(String tid, List<String> texts) {
+  String? near;
+  for (final k in terminals.keys) {
+    if (_digitDiff(k, tid) <= 1) {
+      near = k;
+      break;
+    }
+  }
+  if (near == null) return '';
+  final nm = extractUnitName(texts);
+  if (nm == null) return '?';
+  final r = _existingRowForName(nm);
+  if (r != null && r == terminals[near]!.excelRow) return near;
+  return '';
+}
+
 final Set<String> _learnedThisRun = <String>{}; // ماكينات اتسجلت في الفحص الحالي
 
 int _digitDiff(String a, String b) {
@@ -2148,9 +2167,9 @@ String? _discoverTerminalStrict(List<String> texts) {
   final best = counts.entries.reduce((a, b) => a.value >= b.value ? a : b);
   final tid = best.key;
   if (terminals.containsKey(tid)) return tid;
-  for (final k in terminals.keys) {
-    if (_digitDiff(k, tid) <= 1) return k; // غلطة قراءة رقم واحد: هي الماكينة المعروفة
-  }
+  final nk = _nearKnown(tid, texts);
+  if (nk == '?') return null;
+  if (nk.isNotEmpty) return nk;
   if (best.value < 2) return null;
   final mid = extractMerchantId(texts);
   final uname = extractUnitName(texts) ?? 'Unit $tid';
@@ -2199,12 +2218,10 @@ String? discoverTerminal(List<String> texts, {bool strict = false}) {
     return null;
   }
   var tid = ranked.first.key;
-  if (!terminals.containsKey(tid)) {
-    for (final k in terminals.keys) {
-      if (_digitDiff(k, tid) <= 1) return k; // غلطة قراءة رقم واحد من ماكينة معروفة
-    }
-  }
   if (terminals.containsKey(tid)) return tid;
+  final nk = _nearKnown(tid, texts);
+  if (nk == '?') return null;
+  if (nk.isNotEmpty) return nk;
   final name = extractUnitName(texts) ?? 'Unit $tid';
   // ماكينات بترمنل مختلف لكن نفس الـ MERCHANT ID = نفس الوحدة: بتتحسب مع بعض في صف واحد
   final mid = extractMerchantId(texts);
@@ -2422,12 +2439,14 @@ Analysis analyzeLines(List<OcrLine> all) {
   int? row;
   String? name;
   if (tid == null) {
-    final u0 = findUnitExtraIn(allTexts);
-    tid = findTerminalFuzzyIn(allTexts, u0);
-    how = 'fuzzy';
+    // الأول: رقم ترمنل مقروء بوضوح ومش معروف = ماكينة جديدة (التقريب بيلخبط ماكينات أرقامها قريبة)
+    final known0 = terminals.length;
+    tid = discoverTerminal(allTexts);
+    if (tid != null) how = terminals.length > known0 ? 'new-terminal' : 'fuzzy';
     if (tid == null) {
-      tid = discoverTerminal(allTexts); // ماكينة جديدة لوحدة معروفة
-      if (tid != null) how = 'new-terminal';
+      final u0 = findUnitExtraIn(allTexts);
+      tid = findTerminalFuzzyIn(allTexts, u0);
+      how = 'fuzzy';
     }
   }
   if (tid != null) learnMerchant(tid, allTexts);
@@ -8487,6 +8506,15 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     r.votes = votes;
     var tid = rk.isNotEmpty ? rk.first.key : id.tid;
     var fromUnit = false;
+    var strictTid = false;
+    // أصوات ضعيفة (تقريبية) أو مفيش: جرّب Terminal ID مقروء صريح مكرر في الملف (ممكن يكون ماكينة جديدة)
+    if (rk.isEmpty || rk.first.value < 1.0) {
+      final st = _discoverTerminalStrict([sb.toString()]);
+      if (st != null) {
+        tid = st;
+        strictTid = true;
+      }
+    }
     if (tid == null) {
       // مفيش Terminal ID مقروء: نحدد الوحدة من Merchant ID/اسم الوحدة جوه الـ PDF،
       // ولو الوحدة فيها ماكينة واحدة بس نستخدمها (وتتعلّم للمراجعة)
@@ -8507,7 +8535,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
           '${tid == null ? all.substring(0, all.length > 2500 ? 2500 : all.length) : ''}\n\n',
           mode: FileMode.append);
     } catch (_) {}
-    final top = rk.isNotEmpty ? rk.first.value : 0.0;
+    final top = strictTid ? 3.0 : (rk.isNotEmpty ? rk.first.value : 0.0);
     final weak = tid != null &&
         ((!fromUnit && top < 2) || !_plausibleDay(id.day, id.month));
     if (weak) {
