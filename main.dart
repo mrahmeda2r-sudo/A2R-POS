@@ -786,7 +786,7 @@ void _publishClosing(List<ReceiptItem> items) {
   final bad = <int>{};
   for (final it in items) {
     if (!it.counts) continue;
-    final n = it.orderNum ?? (it.tid != null ? terminals[it.tid]?.orderNum : null);
+    final n = it.tid != null ? (terminals[tidAlias[it.tid!] ?? it.tid!]?.orderNum ?? it.orderNum) : it.orderNum;
     if (n == null) continue;
     final t = it.txn;
     if (t == null) {
@@ -1824,7 +1824,7 @@ String? registerLearned(String tid, String? name, String? mid) {
     var flag = '';
     if (mid == null) {
       flag = hadRows ? 'no-merchant' : '';
-    } else if (hadRows && !registry.any((m) => merchantEq(m.merchant, mid))) {
+    } else if (hadRows && !firstScan && !registry.any((m) => merchantEq(m.merchant, mid))) {
       flag = 'new-unit';
     }
     slot = MachineRow(
@@ -1841,6 +1841,19 @@ String? registerLearned(String tid, String? name, String? mid) {
   rebuildFromRegistry();
   saveRegistry();
   return tid;
+}
+
+// الإيصال بيخزّن رقم الماكينة ورقم الوحدة وقت القراية، وأي تغيير بعد كده في السجل
+// (ماكينة اتحطت في النص، Merchant ID اتكمّل فوحدتين اتدمجوا، ترتيب اتغيّر من الشاشة) بيخلي الأرقام دي قديمة.
+// الدالة دي بترجّعها من السجل الحالي عن طريق الـ Terminal ID (هو الثابت).
+void refreshItemFromRegistry(ReceiptItem it) {
+  final t0 = it.tid;
+  if (t0 == null) return;
+  final info = terminals[tidAlias[t0] ?? t0];
+  if (info == null) return;
+  it.orderNum = info.orderNum;
+  it.row = info.excelRow;
+  it.unitName = info.unitName;
 }
 
 // الماكينة الجديدة (بعد أول فحص) بنفس الـ Merchant ID لوحدة موجودة: بتتحط تحت آخر ماكينة من الوحدة دي.
@@ -3823,8 +3836,15 @@ class ReceiptItem {
   bool get counts => !skip && !dupSuspect && !userExcluded && !ignoredDoc;
 
   // الماكينة/الوحدة متحددة بطريقة مش مؤكدة (تلقائي / بالاسم فقط)
-  bool get weakId =>
-      !(how == 'terminal' || how == 'fuzzy' || how == 'manual' || how == 'extra-batch');
+  bool get weakId {
+    if (how == 'new-terminal') {
+      // Terminal ID اتقرا واضح: مش محتاج تأكيد إلا لو السجل شاكك في الماكينة (Merchant ID مش مطابق / مش مقروء)
+      final t = tid;
+      final mr = t == null ? null : machineByTid(t);
+      return mr == null || mr.flag.isNotEmpty;
+    }
+    return !(how == 'terminal' || how == 'fuzzy' || how == 'manual' || how == 'extra-batch');
+  }
 
   bool get needsReview =>
       ignoredDoc ||
@@ -5208,6 +5228,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Future<void> rebuildFiles() async {
     setState(() => status = 'جاري توليد الملفات وتحديث الشيتات...');
+    for (final r in processedItems) {
+      refreshItemFromRegistry(r); // الإجماليات بتتجمّع بالوحدة: لازم رقم الوحدة يبقى من السجل الحالي
+    }
     final dateCounts = <String, int>{};
     for (final r in processedItems) {
       if (r.date != null) {
@@ -5828,11 +5851,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       return;
     }
 
-    if (regroupNewMachines()) {
-      for (final r in rawReceipts) {
-        final t = r.tid;
-        if (t != null && terminals[t] != null) r.orderNum = terminals[t]!.orderNum;
-      }
+    regroupNewMachines();
+    for (final r in rawReceipts) {
+      refreshItemFromRegistry(r);
     }
     // ═════════ المرحلة 2: التكرار وترقيم الماكينات ═════════
     setState(() => status = 'مراجعة التكرار وترقيم الماكينات...');
@@ -5936,7 +5957,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           warnings.add('$nm: الماكينة ${r.orderNum} ظهرت في صورة تانية بمبلغ مختلف - اتحسبت كباتش إضافي ${r.suffix}');
         } else if (r.how == 'auto-number' || r.how == 'conflict') {
           warnings.add('$nm: رقم الماكينة اتحدد تلقائياً (${r.orderNum}) - اتأكد منه');
-        } else if (!(r.how == 'terminal' || r.how == 'fuzzy' || r.how == 'manual')) {
+        } else if (r.weakId) {
           warnings.add('$nm: الوحدة اتحددت بالاسم/الميرشانت فقط');
         }
       } else {
@@ -10155,6 +10176,54 @@ String? _cleanTid(String raw) {
   return d.length == 8 ? d : null;
 }
 
+// خانة Merchant ID: بتكتب فيها عادي، وكمان لما تدوس عليها بتظهر قايمة بكل الـ Merchant IDs المسجلة (مع اسم الوحدة)
+Widget _merchantField(TextEditingController c, String label) {
+  final opts = <String, String>{};
+  for (final r in registry) {
+    if (r.merchant.isNotEmpty) opts.putIfAbsent(r.merchant, () => r.unit);
+  }
+  return Autocomplete<String>(
+    initialValue: TextEditingValue(text: c.text),
+    optionsBuilder: (v) {
+      final q = v.text.replaceAll(RegExp(r'\D'), '');
+      return opts.keys.where((k) => q.isEmpty || k.contains(q));
+    },
+    onSelected: (o) => c.text = o,
+    fieldViewBuilder: (ctx, tc, fn, onSubmit) => TextField(
+      controller: tc,
+      focusNode: fn,
+      keyboardType: TextInputType.number,
+      onChanged: (v) => c.text = v,
+      decoration: InputDecoration(
+        labelText: label,
+        suffixIcon: opts.isEmpty ? null : const Icon(Icons.arrow_drop_down),
+      ),
+    ),
+    optionsViewBuilder: (ctx, onSelected, options) => Align(
+      alignment: Alignment.topLeft,
+      child: Material(
+        elevation: 4,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 220, maxWidth: 300),
+          child: ListView(
+            padding: EdgeInsets.zero,
+            shrinkWrap: true,
+            children: [
+              for (final o in options)
+                ListTile(
+                  dense: true,
+                  title: w.Text(o, textDirection: TextDirection.ltr),
+                  subtitle: w.Text(opts[o] ?? ''),
+                  onTap: () => onSelected(o),
+                ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class MachinesManagePage extends StatefulWidget {
   const MachinesManagePage({super.key});
 
@@ -10201,11 +10270,7 @@ class _MachinesManagePageState extends State<MachinesManagePage> {
                   decoration: InputDecoration(labelText: tr('اسم الوحدة')),
                 ),
                 const SizedBox(height: 8),
-                TextField(
-                  controller: mer,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(labelText: tr('Merchant ID')),
-                ),
+                _merchantField(mer, tr('Merchant ID')),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('إجازة (مش بتتحسب ناقصة)'),
@@ -10302,11 +10367,7 @@ class _MachinesManagePageState extends State<MachinesManagePage> {
                 decoration: InputDecoration(labelText: tr('اسم الوحدة')),
               ),
               const SizedBox(height: 8),
-              TextField(
-                controller: mer,
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(labelText: tr('Merchant ID (ده اللي بيربطها بالوحدة)')),
-              ),
+              _merchantField(mer, tr('Merchant ID (ده اللي بيربطها بالوحدة)')),
               const SizedBox(height: 8),
               const Text('هتفضل محجوزة (من غير Terminal ID) لحد ما تظهر في فحص بنفس الـ Merchant ID فتتسجل لوحدها.',
                   style: TextStyle(fontSize: 12)),
