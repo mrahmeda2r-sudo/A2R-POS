@@ -445,7 +445,7 @@ Widget _moreMenu(BuildContext context, {required bool busy, required VoidCallbac
       PopupMenuItem(
           value: 'resetApps', child: w.Text(ar ? 'إعادة اختيار تطبيقات الفتح' : 'Reset default apps')),
       PopupMenuItem(value: 'log', child: w.Text(ar ? 'مشاركة اللوج' : 'Share log')),
-      PopupMenuItem(value: 'settings', child: w.Text(ar ? 'إعدادات الماكينات (إكسيل)' : 'Machines settings (Excel)')),
+      PopupMenuItem(value: 'settings', child: w.Text(ar ? 'إدارة الماكينات' : 'Manage machines')),
       const PopupMenuDivider(),
       PopupMenuItem(
           value: 'wipe',
@@ -1585,6 +1585,304 @@ final Map<String, int> merchantCodeMap = {};
 final List<MapEntry<List<String>, int>> nameHints = [];
 final Map<int, String> rowNames = {};
 
+// ════════════════════════════════════════════════════════════════════
+// سجل الماكينات (المصدر الأساسي). سطر واحد = ماكينة واحدة، والترتيب في القايمة = رقم الماكينة (index + 1)
+// tid فاضي = مكان محجوز (ماكينة لسه ما اشتغلتش)
+// ════════════════════════════════════════════════════════════════════
+class MachineRow {
+  String tid;
+  String unit; // اسم الوحدة (عربي أو إنجليزي)
+  String merchant; // MERCHANT ID: هو اللي بيجمّع الماكينات في إجمالي واحد
+  String status; // active | off (إجازة)
+  bool auto; // اتعلّمت تلقائي من الفحص
+  bool lockName; // الاسم اتعدّل يدوي: الفحص ما يغيّرهوش
+  bool lockMerch;
+  String flag; // new-unit | no-merchant | by-name  (للمراجعة)
+  bool unplaced; // اتعلّمت في فحص بعد الأول ولسه ما اتحطتش تحت وحدتها
+  Map<String, int> votes; // تصويت على الاسم من الإيصالات
+  int row = 0; // رقم الوحدة (بيتحسب من الـ Merchant ID، مش بيتحفظ)
+
+  MachineRow({
+    this.tid = '',
+    this.unit = '',
+    this.merchant = '',
+    this.status = 'active',
+    this.auto = false,
+    this.lockName = false,
+    this.lockMerch = false,
+    this.flag = '',
+    this.unplaced = false,
+    Map<String, int>? votes,
+  }) : votes = votes ?? <String, int>{};
+
+  bool get reserved => tid.isEmpty;
+
+  Map<String, dynamic> toJson() => {
+        'tid': tid,
+        'unit': unit,
+        'merchant': merchant,
+        'status': status,
+        'auto': auto,
+        'lockName': lockName,
+        'lockMerch': lockMerch,
+        'flag': flag,
+        'unplaced': unplaced,
+        'votes': votes,
+      };
+
+  static MachineRow fromJson(Map<String, dynamic> j) => MachineRow(
+        tid: (j['tid'] ?? '').toString(),
+        unit: (j['unit'] ?? '').toString(),
+        merchant: (j['merchant'] ?? '').toString(),
+        status: (j['status'] ?? 'active').toString(),
+        auto: j['auto'] == true,
+        lockName: j['lockName'] == true,
+        lockMerch: j['lockMerch'] == true,
+        flag: (j['flag'] ?? '').toString(),
+        unplaced: j['unplaced'] == true,
+        votes: {
+          for (final e in ((j['votes'] as Map?) ?? {}).entries) e.key.toString(): (e.value as num).toInt()
+        },
+      );
+}
+
+final List<MachineRow> registry = [];
+final String registryPath = '$baseDir/.app_registry.json';
+bool _regLoaded = false;
+final List<String> registryWarnings = []; // تنبيهات الفحص الحالي
+
+// تطابق كامل بس. الاستثناء الوحيد: كود أقصر (10 أرقام أو أكتر) هو نهاية كود أطول
+// (OCR بيلزّق أرقام زيادة قدّام الكود). فرق رقم واحد في النص = وحدة تانية.
+bool merchantEq(String a, String b) {
+  if (a.isEmpty || b.isEmpty) return false;
+  if (a == b) return true;
+  final s = a.length <= b.length ? a : b;
+  final l = a.length <= b.length ? b : a;
+  return s.length >= 10 && l.endsWith(s);
+}
+
+MachineRow? machineByTid(String tid) {
+  for (final m in registry) {
+    if (m.tid == tid) return m;
+  }
+  return null;
+}
+
+// الماكينات اللي لو ما ظهرتش في اليوم تتنبّه عليها: مش المحجوزة ومش الإجازة
+List<int> expectedMachineNums() {
+  final out = <int>[];
+  for (var i = 0; i < registry.length; i++) {
+    final m = registry[i];
+    if (!m.reserved && m.status == 'active') out.add(i + 1);
+  }
+  return out;
+}
+
+String _unitNameOfRow(int row) {
+  for (final m in registry) {
+    if (m.row == row && m.lockName && m.unit.trim().isNotEmpty) return m.unit.trim();
+  }
+  for (final m in registry) {
+    if (m.row == row && m.unit.trim().isNotEmpty) return m.unit.trim();
+  }
+  return 'وحدة $row';
+}
+
+// بيبني الفهارس القديمة من السجل. لازم يتنده بعد أي تغيير في registry
+void rebuildFromRegistry() {
+  terminals.clear();
+  numToTid.clear();
+  rowNames.clear();
+  merchantCodeMap.clear();
+  final reps = <int, MachineRow>{};
+  var next = 0;
+  for (final m in registry) {
+    int? row;
+    if (m.merchant.isNotEmpty) {
+      for (final e in reps.entries) {
+        if (merchantEq(e.value.merchant, m.merchant)) {
+          row = e.key;
+          break;
+        }
+      }
+    }
+    if (row == null) {
+      row = ++next;
+      reps[row] = m;
+    }
+    m.row = row;
+  }
+  for (var i = 0; i < registry.length; i++) {
+    final m = registry[i];
+    final name = _unitNameOfRow(m.row);
+    rowNames.putIfAbsent(m.row, () => name);
+    if (m.merchant.isNotEmpty) merchantCodeMap.putIfAbsent(m.merchant, () => m.row);
+    if (!m.reserved) {
+      terminals[m.tid] = TerminalInfo(i + 1, m.row, name);
+      numToTid[i + 1] = m.tid;
+    }
+  }
+}
+
+void saveRegistry() {
+  try {
+    File(registryPath)
+      ..createSync(recursive: true)
+      ..writeAsStringSync(jsonEncode(registry.map((m) => m.toJson()).toList()));
+  } catch (e) {
+    _dbg('registry save error: $e');
+  }
+}
+
+// أول تشغيل: لو فيه A2R_Settings.xlsx قديم بيتنقل مرة واحدة لجوه السجل. غير كده السجل بيبدأ فاضي.
+Future<void> loadRegistry() async {
+  if (_regLoaded) return;
+  try {
+    final f = File(registryPath);
+    if (f.existsSync()) {
+      final l = jsonDecode(f.readAsStringSync());
+      registry.clear();
+      if (l is List) {
+        for (final e in l.whereType<Map>()) {
+          registry.add(MachineRow.fromJson(Map<String, dynamic>.from(e)));
+        }
+      }
+    } else if (File(settingsPath).existsSync()) {
+      await loadSettingsFromExcel(force: true);
+      registry.clear();
+      final byNum = terminals.entries.toList()..sort((a, b) => a.value.orderNum.compareTo(b.value.orderNum));
+      for (final e in byNum) {
+        var mc = '';
+        for (final k in merchantCodeMap.entries) {
+          if (k.value == e.value.excelRow) {
+            mc = k.key;
+            break;
+          }
+        }
+        registry.add(MachineRow(
+          tid: e.key,
+          unit: e.value.unitName,
+          merchant: mc,
+          lockName: true,
+          lockMerch: mc.isNotEmpty,
+        ));
+      }
+      saveRegistry();
+    }
+    _regLoaded = true;
+  } catch (e) {
+    _dbg('registry load error: $e');
+  }
+  rebuildFromRegistry();
+}
+
+// ماكينة جديدة ظهرت في إيصال. القواعد:
+//  1) فيه سطر محجوز (TID فاضي) بنفس الـ Merchant ID تمام -> بيملاه (أول واحد بالترتيب)
+//  2) فيه سطر محجوز من غير Merchant ID واسمه يشبه الاسم المقروء -> بيملاه + تنبيه "by-name"
+//  3) غير كده -> بتتضاف في آخر القايمة. وبعد ما الفحص يخلص قراية regroupNewMachines بتنزّلها تحت آخر
+//     ماكينة من نفس الـ Merchant ID (إلا في أول فحص: الترتيب بظهور الباتشات).
+//     لو الـ Merchant ID مش مطابق لأي حاجة: وحدة جديدة + تنبيه.
+String? registerLearned(String tid, String? name, String? mid) {
+  if (machineByTid(tid) != null) return tid;
+  final hadRows = registry.isNotEmpty;
+  final firstScan = registry.every((m) => _learnedThisRun.contains(m.tid));
+  MachineRow? slot;
+  var how = '';
+  if (mid != null) {
+    for (final m in registry) {
+      if (m.reserved && m.merchant.isNotEmpty && merchantEq(m.merchant, mid)) {
+        slot = m;
+        how = 'merchant';
+        break;
+      }
+    }
+  }
+  if (slot == null && name != null) {
+    final k = _normUnit(name);
+    for (final m in registry) {
+      if (!m.reserved || m.merchant.isNotEmpty || m.unit.isEmpty) continue;
+      final o = _normUnit(m.unit);
+      final mx = math.max(o.length, k.length);
+      if (o == k || (mx >= 6 && _editDistance(o, k) <= (mx * 0.15).floor())) {
+        slot = m;
+        how = 'name';
+        break;
+      }
+    }
+  }
+  if (slot != null) {
+    slot.tid = tid;
+    slot.status = 'active';
+    slot.auto = true;
+    if (slot.merchant.isEmpty && mid != null) slot.merchant = mid;
+    if (slot.unit.isEmpty && name != null) slot.unit = name;
+    if (how == 'name') slot.flag = 'by-name';
+    _dbg('RESERVED FILLED ($how) $tid -> ماكينة ${registry.indexOf(slot) + 1}');
+    registryWarnings.add('ماكينة ${registry.indexOf(slot) + 1} (${slot.unit}) اتملت من مكان محجوز'
+        '${how == 'name' ? ' بالاسم فقط - اتأكد' : ''}');
+  } else {
+    var flag = '';
+    if (mid == null) {
+      flag = hadRows ? 'no-merchant' : '';
+    } else if (hadRows && !registry.any((m) => merchantEq(m.merchant, mid))) {
+      flag = 'new-unit';
+    }
+    slot = MachineRow(
+        tid: tid, unit: name ?? '', merchant: mid ?? '', auto: true, flag: flag, unplaced: !firstScan);
+    registry.add(slot);
+    _dbg('NEW TERMINAL $tid -> ${name ?? '?'} merchant=${mid ?? '?'} (ماكينة ${registry.length}) flag=$flag');
+    if (flag.isNotEmpty) {
+      registryWarnings.add('ماكينة جديدة ${registry.length} ($tid): '
+          '${flag == 'new-unit' ? 'Merchant ID مش مطابق لأي وحدة - اتضافت كوحدة جديدة' : 'Merchant ID مش مقروء - مش معروف بتتبع أنهي وحدة'}');
+    }
+  }
+  if (name != null) slot.votes[name] = (slot.votes[name] ?? 0) + 1;
+  _learnedThisRun.add(tid);
+  rebuildFromRegistry();
+  saveRegistry();
+  return tid;
+}
+
+// الماكينة الجديدة (بعد أول فحص) بنفس الـ Merchant ID لوحدة موجودة: بتتحط تحت آخر ماكينة من الوحدة دي.
+// بتتنده بعد ما الباتشات تتقرا، لأن الصور اللي اتقرت قبلها شايلة رقم ماكينة ولو اتزحزح في النص هيبقى غلط.
+// بترجع true لو حركت أي ماكينة. بتنده rebuildFromRegistry وsaveRegistry بنفسها.
+bool regroupNewMachines() {
+  final pending = registry.where((m) => m.unplaced && m.auto).toList();
+  if (pending.isEmpty) {
+    for (final m in registry) {
+      m.unplaced = false;
+    }
+    return false;
+  }
+  final waiting = pending.toSet(); // لسه ما اتحطتش: ما تتحسبش ضمن "آخر ماكينة في الوحدة"
+  var moved = false;
+  for (final m in pending) {
+    waiting.remove(m);
+    m.unplaced = false;
+    if (m.merchant.isEmpty || m.reserved) continue;
+    var last = -1;
+    for (var i = 0; i < registry.length; i++) {
+      final x = registry[i];
+      if (identical(x, m) || waiting.contains(x)) continue;
+      if (merchantEq(x.merchant, m.merchant)) last = i;
+    }
+    if (last < 0) continue; // وحدة جديدة: تفضل في الآخر
+    final from = registry.indexOf(m);
+    if (from == last + 1) continue; // أصلاً في مكانها
+    registry.removeAt(from);
+    final at = from < last ? last : last + 1;
+    registry.insert(at, m);
+    moved = true;
+    registryWarnings.add('ماكينة ${m.tid} اتحطت رقم ${at + 1} جنب وحدتها (${m.unit}) - الأرقام اللي بعدها اتزحزحت');
+  }
+  for (final m in registry) {
+    m.unplaced = false;
+  }
+  rebuildFromRegistry();
+  saveRegistry();
+  return moved;
+}
+
 // بيبني الفهارس (رقم الماكينة -> TID ، رقم الصف -> اسم الوحدة) من الماكينات المحمّلة
 void rebuildTerminalIndexes() {
   numToTid.clear();
@@ -2078,26 +2376,44 @@ String? extractMerchantId(List<String> texts) {
   return mostCommon(found)?.key;
 }
 
-// لو الـ MERCHANT ID ده متسجل قبل كده (أو قريب جداً منه بفرق رقم واحد من غلط القراءة) بنرجّع صف وحدته
+// لو الـ MERCHANT ID ده متسجل قبل كده بنرجّع صف وحدته (تطابق كامل بس، من غير تقريب)
 int? _rowForMerchant(String mid) {
-  final exact = merchantCodeMap[mid];
-  if (exact != null) return exact;
   for (final e in merchantCodeMap.entries) {
-    final k = e.key;
-    // مفيش مطابقة تقريبية: أكواد التجار بتاعة الوحدات بتختلف في رقم واحد بس (…029084 / …026084 / …022084)
-    if (k.length >= 10 && mid.length > k.length && mid.contains(k)) return e.value;
+    if (merchantEq(e.key, mid)) return e.value;
   }
   return null;
 }
 
-// ماكينة معروفة بس الـ MERCHANT ID بتاعها لسه مش متسجل: بنسجّله علشان الماكينات الجاية بنفس الكود تدخل نفس الوحدة
+// بتكمّل Merchant ID الناقص، وبتصوّت على الاسم (إلا لو انت قفلته). أي تعارض بيتسجل تنبيه بس، مش بيغيّر حاجة.
 void learnMerchant(String tid, List<String> texts) {
-  final t = terminals[tid];
-  if (t == null) return;
+  final m = machineByTid(tid);
+  if (m == null) return;
+  var ch = false;
   final mid = extractMerchantId(texts);
-  if (mid == null || _rowForMerchant(mid) != null) return;
-  merchantCodeMap[mid] = t.excelRow;
-  saveSettingsToExcel();
+  if (mid != null) {
+    if (m.merchant.isEmpty && !m.lockMerch) {
+      m.merchant = mid;
+      ch = true;
+    } else if (m.merchant.isNotEmpty && !merchantEq(m.merchant, mid)) {
+      final msg = 'ماكينة ${registry.indexOf(m) + 1} ($tid): الـ Merchant ID المقروء $mid مختلف عن المسجل ${m.merchant}';
+      if (!registryWarnings.contains(msg)) registryWarnings.add(msg);
+    }
+  }
+  if (!m.lockName) {
+    final nm = extractUnitName(texts);
+    if (nm != null) {
+      m.votes[nm] = (m.votes[nm] ?? 0) + 1;
+      final best = m.votes.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+      if (best != m.unit) {
+        m.unit = best;
+        ch = true;
+      }
+    }
+  }
+  if (ch) {
+    rebuildFromRegistry();
+    saveRegistry();
+  }
 }
 
 // ماكينة جديدة مكتوبة على الإيصال (Terminal ID) ومش في القايمة: بنسجّلها هي ووحدتها وبنحفظها في ملف الإعدادات
@@ -2172,23 +2488,11 @@ String? _discoverTerminalStrict(List<String> texts) {
   if (nk.isNotEmpty) return nk;
   if (best.value < 2) return null;
   final mid = extractMerchantId(texts);
-  final uname = extractUnitName(texts) ?? 'Unit $tid';
-  var row = _existingRowForName(uname);
-  row ??= mid == null ? null : _rowForMerchant(mid);
-  // وحدة جديدة خالص: بس لو رقم الترمنل اتقرا كذا مرة (ملف الدفع فيه عشرات الإيصالات، فالغلطة العابرة ما بتكررش)
-  if (row == null) {
-    if (best.value < 5) return null;
-    row = _rowForUnitName(uname);
-  }
-  var order = 0;
-  for (final x in terminals.values) {
-    if (x.orderNum > order) order = x.orderNum;
-  }
-  terminals[tid] = TerminalInfo(order + 1, row, rowNames[row] ?? uname);
-  rebuildTerminalIndexes();
-  saveSettingsToExcel();
-  _dbg('NEW TERMINAL (إيصالات الدفع) $tid -> ${terminals[tid]!.unitName} (ماكينة ${order + 1})');
-  return tid;
+  final uname = extractUnitName(texts);
+  final knownUnit = (mid != null && _rowForMerchant(mid) != null) ||
+      (uname != null && _existingRowForName(uname) != null);
+  if (!knownUnit && best.value < 5) return null;
+  return registerLearned(tid, uname, mid);
 }
 
 String? discoverTerminal(List<String> texts, {bool strict = false}) {
@@ -2222,24 +2526,9 @@ String? discoverTerminal(List<String> texts, {bool strict = false}) {
   final nk = _nearKnown(tid, texts);
   if (nk == '?') return null;
   if (nk.isNotEmpty) return nk;
-  final name = extractUnitName(texts) ?? 'Unit $tid';
-  // ماكينات بترمنل مختلف لكن نفس الـ MERCHANT ID = نفس الوحدة: بتتحسب مع بعض في صف واحد
+  final name = extractUnitName(texts);
   final mid = extractMerchantId(texts);
-  final byMerchant = mid == null ? null : _rowForMerchant(mid);
-  // الاسم المطبوع على الإيصال أدق من كود التاجر (كود التاجر ممكن يتقرا غلط ويلخبط الوحدات)
-  final byName = _existingRowForName(name);
-  final row = byName ?? byMerchant ?? _rowForUnitName(name);
-  var order = 0;
-  for (final t in terminals.values) {
-    if (t.orderNum > order) order = t.orderNum;
-  }
-  terminals[tid] = TerminalInfo(order + 1, row, rowNames[row] ?? name);
-  if (mid != null && byMerchant == null) merchantCodeMap[mid] = row;
-  _learnedThisRun.add(tid);
-  _dbg('NEW TERMINAL (باتشات) $tid -> ${rowNames[row] ?? name} (ماكينة ${order + 1})');
-  rebuildTerminalIndexes();
-  saveSettingsToExcel();
-  return tid;
+  return registerLearned(tid, name, mid);
 }
 
 String? _tidLoose(String t) {
@@ -5005,7 +5294,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final foundOrders =
         mainItems.where((e) => e.amount > 0).map((e) => e.orderNum).whereType<int>().toSet();
     missingTerminals = [
-      for (final i in machineNums())
+      for (final i in expectedMachineNums())
         if (!foundOrders.contains(i) && !ignore.contains(i)) i
     ];
     writeReport(reportDate);
@@ -5015,11 +5304,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final ms = terminals.entries.toList()..sort((a, b) => a.value.orderNum.compareTo(b.value.orderNum));
       sourceNote += '\n• الماكينات المسجلة (بترتيب الملف): ' +
           ms.map((e) => '${e.value.orderNum}) ${e.value.unitName} ${e.key}').join(' ، ') +
-          '\n  (تقدر تعدّلها من: ⋮ ← إعدادات الماكينات)';
+          '\n  (تقدر تعدّلها من: ⋮ ← إدارة الماكينات)';
     }
     final unresolved = mainItems.where((e) => e.amount > 0 && e.orderNum == null).length;
     if (unresolved > 0 && _learnedThisRun.isNotEmpty) {
       sourceNote += '\n⚠️ $unresolved باتش مقدرتش أعرف ماكينته (رقم الترمنل مش واضح). حدّد ماكينتهم من المراجعة وهتتسجل.';
+    }
+    if (registryWarnings.isNotEmpty) {
+      sourceNote += '\n⚠️ تنبيهات الماكينات:\n• ${registryWarnings.join('\n• ')}';
     }
 
     setState(() => status = 'اكتمل العد: ${_countLine()}\n'
@@ -5169,6 +5461,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     await prepareDefaultFiles();
     _learnedThisRun.clear();
+    registryWarnings.clear();
+    regroupNewMachines(); // ماكينات اتعلّمت من إيصالات الدفع في المرة اللي فاتت
 
     setState(() {
       busy = true;
@@ -5499,6 +5793,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       return;
     }
 
+    if (regroupNewMachines()) {
+      for (final r in rawReceipts) {
+        final t = r.tid;
+        if (t != null && terminals[t] != null) r.orderNum = terminals[t]!.orderNum;
+      }
+    }
     // ═════════ المرحلة 2: التكرار وترقيم الماكينات ═════════
     setState(() => status = 'مراجعة التكرار وترقيم الماكينات...');
     final prio = <String, int>{'manual': 0, 'terminal': 0, 'new-terminal': 0, 'fuzzy': 1, 'file-number': 2};
@@ -8264,6 +8564,8 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
 
   Future<void> _run(bool resumeOnly, bool count, {List<String>? manualPaths}) async {
     await prepareDefaultFiles();
+    registryWarnings.clear();
+    regroupNewMachines();
     _dbg('MACH start: ماكينات متسجلة=${terminals.length} | ربط التقفيل=${closingTxn.value}');
     setState(() {
       busy = true;
@@ -8637,7 +8939,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     if (tid == null || !terminals.containsKey(tid)) {
       r.idOk = false;
       r.idNotes.add(terminals.isEmpty
-          ? 'مفيش ماكينات متسجلة: شغّل فحص الباتشات (التقفيل) الأول علشان يتعلّم الماكينات، أو املا A2R_Settings'
+          ? 'مفيش ماكينات متسجلة: شغّل فحص الباتشات (التقفيل) الأول علشان يتعلّم الماكينات، أو ضيفهم من ⋮ ← إدارة الماكينات'
           : 'مش قادر أعرف الماكينة من الـ PDF${tid != null ? ' (الرقم $tid مش متسجل في الماكينات)' : ''}');
       return;
     }
@@ -9051,7 +9353,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   List<String> missingMachines() {
     final got = results.where((r) => !r.excluded).map((r) => r.orderNum).whereType<int>().toSet();
     final out = <String>[];
-    for (final n in machineNums()) {
+    for (final n in expectedMachineNums()) {
       if (!got.contains(n)) out.add('$n ${terminals[numToTid[n]]!.unitName}');
     }
     return out;
@@ -9605,8 +9907,14 @@ void _loadSettingsFromJson() {
   }
 }
 
-// بيكتب الماكينات والوحدات اللي اتعرفت (من الإيصالات أو من الملف) في ملف الإعدادات
+// حفظ الإعدادات = حفظ السجل (المصدر الأساسي)
 bool saveSettingsToExcel() {
+  saveRegistry();
+  return true;
+}
+
+// تصدير نسخة إكسيل احتياطية من الماكينات اللي ليها TID
+bool exportSettingsToExcel() {
   try {
     final f = File(settingsPath);
     f.parent.createSync(recursive: true);
@@ -9689,23 +9997,15 @@ Future<void> prepareDefaultFiles() async {
   try {
     if (await Permission.manageExternalStorage.isGranted) {
       await ensureDefaultFiles();
-      await ensureSettingsFile();
+      await loadRegistry(); // بعد الإذن بس، علشان ما نعتبرش السجل فاضي غلط
     }
   } catch (_) {}
-  await loadSettingsFromExcel();
 }
 
 // أول مرة: بينسخ ملفي الإعدادات والقالب (المرفوعين مع المشروع) لمجلد التطبيق لو مش موجودين
 Future<void> ensureDefaultFiles() async {
   try {
     Directory(baseDir).createSync(recursive: true);
-    final st = File(settingsPath);
-    if (!st.existsSync()) {
-      try {
-        final d = await rootBundle.load('assets/A2R_Settings.xlsx');
-        st.writeAsBytesSync(d.buffer.asUint8List());
-      } catch (_) {}
-    }
     final tp = File('$baseDir/template.xlsx');
     if (!tp.existsSync()) {
       try {
@@ -9762,22 +10062,550 @@ Future<bool> ensureSettingsFile() async {
   }
 }
 
+// بيفتح شاشة إدارة الماكينات (من ⋮ بس)
+Future<void> openSettingsFile(BuildContext context) => openMachinesManager(context);
 
-// بيفتح ملف إعدادات الماكينات (A2R_Settings.xlsx) وبيعمله لو مش موجود
-Future<void> openSettingsFile(BuildContext context) async {
-  await loadSettingsFromExcel();
-  final ok = await ensureSettingsFile();
-  if (!context.mounted) return;
-  if (!ok) {
+Future<void> openMachinesManager(BuildContext context) async {
+  if (homeBusyG || machBusyG || chainRunning) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('مقدرتش أعمل ملف الإعدادات. اتأكد من إذن الوصول لكل الملفات.')),
+      const SnackBar(content: Text('استنى لحد ما الفحص يخلص أو وقّفه الأول.')),
     );
     return;
   }
-  try {
-    await _chan.invokeMethod<bool>('openFile', {
-      'path': settingsPath,
-      'mime': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    });
-  } catch (_) {}
+  await Navigator.push(context, MaterialPageRoute(builder: (_) => const MachinesManagePage()));
+}
+
+// استيراد احتياطي من ملف A2R_Settings.xlsx: بيستبدل السجل كله
+Future<bool> importRegistryFromExcel() async {
+  await loadSettingsFromExcel(force: true);
+  if (terminals.isEmpty) {
+    rebuildFromRegistry(); // القارئ القديم مسح الفهارس: نرجّعها من السجل
+    return false;
+  }
+  registry.clear();
+  final byNum = terminals.entries.toList()
+    ..sort((a, b) => a.value.orderNum.compareTo(b.value.orderNum));
+  for (final e in byNum) {
+    var mc = '';
+    for (final k in merchantCodeMap.entries) {
+      if (k.value == e.value.excelRow) {
+        mc = k.key;
+        break;
+      }
+    }
+    registry.add(MachineRow(
+      tid: e.key,
+      unit: e.value.unitName,
+      merchant: mc,
+      lockName: true,
+      lockMerch: mc.isNotEmpty,
+    ));
+  }
+  rebuildFromRegistry();
+  saveRegistry();
+  return true;
+}
+
+String _flagText(String f) => f == 'new-unit'
+    ? '⚠️ Merchant ID مش مطابق لأي وحدة - راجعه'
+    : f == 'no-merchant'
+        ? '⚠️ Merchant ID مش مقروء - مش معروف تبع أنهي وحدة'
+        : f == 'by-name'
+            ? '⚠️ اتملت من مكان محجوز بالاسم فقط - اتأكد'
+            : '';
+
+String? _cleanTid(String raw) {
+  var d = raw.replaceAll(RegExp(r'\D'), '');
+  if (d.length > 8) d = d.substring(d.length - 8);
+  return d.length == 8 ? d : null;
+}
+
+class MachinesManagePage extends StatefulWidget {
+  const MachinesManagePage({super.key});
+
+  @override
+  State<MachinesManagePage> createState() => _MachinesManagePageState();
+}
+
+class _MachinesManagePageState extends State<MachinesManagePage> {
+  void _commit() {
+    rebuildFromRegistry();
+    saveRegistry();
+    if (mounted) setState(() {});
+  }
+
+  void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: w.Text(m)));
+
+  bool _tidTaken(String tid, MachineRow except) => registry.any((x) => !identical(x, except) && x.tid == tid);
+
+  // ───── تعديل سطر ─────
+  Future<void> _edit(int i) async {
+    final m = registry[i];
+    final tid = TextEditingController(text: m.tid);
+    final name = TextEditingController(text: m.unit);
+    final mer = TextEditingController(text: m.merchant);
+    var off = m.status == 'off';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: w.Text('ماكينة ${i + 1}'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: tid,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(labelText: tr('Terminal ID (فاضي = مكان محجوز)')),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: name,
+                  textDirection: TextDirection.rtl,
+                  decoration: InputDecoration(labelText: tr('اسم الوحدة')),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: mer,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(labelText: tr('Merchant ID')),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('إجازة (مش بتتحسب ناقصة)'),
+                  value: off,
+                  onChanged: (v) => setS(() => off = v),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حفظ')),
+          ],
+        ),
+      ),
+    );
+    final tRaw = tid.text, nRaw = name.text.trim(), mRaw = mer.text.replaceAll(RegExp(r'\D'), '');
+    tid.dispose();
+    name.dispose();
+    mer.dispose();
+    if (ok != true) return;
+    String newTid = '';
+    if (tRaw.trim().isNotEmpty) {
+      final t = _cleanTid(tRaw);
+      if (t == null) {
+        _snack('Terminal ID لازم 8 أرقام.');
+        return;
+      }
+      if (_tidTaken(t, m)) {
+        _snack('الـ Terminal ID ده مسجل في ماكينة تانية.');
+        return;
+      }
+      newTid = t;
+    }
+    if (nRaw != m.unit) {
+      m.unit = nRaw;
+      m.lockName = nRaw.isNotEmpty; // اتعدّل يدوي: الفحص ما يغيّرهوش
+    }
+    if (mRaw != m.merchant) {
+      m.merchant = mRaw;
+      m.lockMerch = mRaw.isNotEmpty;
+    }
+    m.tid = newTid;
+    m.status = off ? 'off' : 'active';
+    m.flag = '';
+    m.auto = false;
+    _commit();
+  }
+
+  Future<void> _delete(int i) async {
+    final m = registry[i];
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: w.Text('مسح ماكينة ${i + 1}؟'),
+        content: const Text('اللي بعدها هيتزحزح رقمه. الأسماء القديمة للصور هتتحدث في الفحص الجاي.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('مسح'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    registry.remove(m);
+    _commit();
+  }
+
+  // ───── إضافة ماكينة (محجوزة) في مكان معين ─────
+  Future<void> _addAt() async {
+    final pos = TextEditingController(text: '${registry.length + 1}');
+    final name = TextEditingController();
+    final mer = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إضافة ماكينة في مكان معين'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: pos,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(labelText: tr('في أنهي رقم؟ (اللي بعده هيتزحزح)')),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: name,
+                textDirection: TextDirection.rtl,
+                decoration: InputDecoration(labelText: tr('اسم الوحدة')),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: mer,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(labelText: tr('Merchant ID (ده اللي بيربطها بالوحدة)')),
+              ),
+              const SizedBox(height: 8),
+              const Text('هتفضل محجوزة (من غير Terminal ID) لحد ما تظهر في فحص بنفس الـ Merchant ID فتتسجل لوحدها.',
+                  style: TextStyle(fontSize: 12)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('إضافة')),
+        ],
+      ),
+    );
+    final p = int.tryParse(pos.text.trim()) ?? registry.length + 1;
+    final n = name.text.trim();
+    final d = mer.text.replaceAll(RegExp(r'\D'), '');
+    pos.dispose();
+    name.dispose();
+    mer.dispose();
+    if (ok != true) return;
+    if (n.isEmpty && d.isEmpty) {
+      _snack('اكتب اسم الوحدة أو الـ Merchant ID.');
+      return;
+    }
+    final at = (p - 1).clamp(0, registry.length);
+    registry.insert(at, MachineRow(unit: n, merchant: d, lockName: n.isNotEmpty, lockMerch: d.isNotEmpty));
+    _commit();
+    _snack('اتضافت ماكينة محجوزة رقم ${at + 1}');
+  }
+
+  // ───── لصق عمود واحد (سطر لكل ماكينة بالترتيب) ─────
+  Future<void> _pasteColumn(String kind) async {
+    final title = kind == 'tid' ? 'لصق Terminal IDs' : kind == 'merchant' ? 'لصق Merchant IDs' : 'لصق أسامي الوحدات';
+    final txt = TextEditingController();
+    final start = TextEditingController(text: '1');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: start,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(labelText: tr('ابدأ من ماكينة رقم')),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: txt,
+                maxLines: 8,
+                textDirection: kind == 'name' ? TextDirection.rtl : TextDirection.ltr,
+                decoration: InputDecoration(
+                  hintText: tr('سطر لكل ماكينة'),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton.icon(
+                  icon: const Icon(Icons.paste, size: 18),
+                  label: const Text('لصق من الحافظة'),
+                  onPressed: () async {
+                    final d = await Clipboard.getData('text/plain');
+                    if (d?.text != null) txt.text = d!.text!;
+                  },
+                ),
+              ),
+              const Text('السطر الفاضي بيتخطّى (الماكينة بتفضل زي ما هي). لو العمود أطول من القايمة بيتضاف سطور جديدة.',
+                  style: TextStyle(fontSize: 12)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تطبيق')),
+        ],
+      ),
+    );
+    final text = txt.text;
+    final s = (int.tryParse(start.text.trim()) ?? 1).clamp(1, registry.length + 1);
+    txt.dispose();
+    start.dispose();
+    if (ok != true) return;
+    final lines = text.split(RegExp(r'\r?\n'));
+    while (lines.isNotEmpty && lines.last.trim().isEmpty) {
+      lines.removeLast();
+    }
+    var idx = s - 1, done = 0, bad = 0;
+    for (final line in lines) {
+      final cur = idx++;
+      final raw = line.trim();
+      if (raw.isEmpty) continue;
+      // لو اتنسخ من إكسيل بأكتر من عمود: ناخد أول خلية
+      final v = raw.contains('\t') ? raw.split('\t').first.trim() : raw;
+      if (v.isEmpty) continue;
+      String? val;
+      if (kind == 'tid') {
+        val = _cleanTid(v);
+      } else if (kind == 'merchant') {
+        final d = v.replaceAll(RegExp(r'\D'), '');
+        val = d.isEmpty ? null : d;
+      } else {
+        val = v;
+      }
+      if (val == null) {
+        bad++;
+        continue;
+      }
+      while (registry.length <= cur) {
+        registry.add(MachineRow());
+      }
+      final m = registry[cur];
+      if (kind == 'tid') {
+        if (_tidTaken(val, m)) {
+          bad++;
+          continue;
+        }
+        m.tid = val;
+        m.auto = false;
+      } else if (kind == 'merchant') {
+        m.merchant = val;
+        m.lockMerch = true;
+      } else {
+        m.unit = val;
+        m.lockName = true;
+      }
+      m.flag = '';
+      done++;
+    }
+    _commit();
+    _snack('اتلصق $done${bad > 0 ? ' • اتخطّى $bad (رقم غلط أو مكرر)' : ''}');
+  }
+
+  // ───── إكسيل احتياطي ─────
+  Future<void> _exportExcel() async {
+    if (!exportSettingsToExcel()) {
+      _snack('مقدرتش أعمل الملف.');
+      return;
+    }
+    await Share.shareXFiles([XFile(settingsPath)], text: 'نسخة احتياطية: ماكينات A2R');
+  }
+
+  Future<void> _importExcel() async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('استيراد من إكسيل'),
+        content: const Text('القايمة الحالية كلها هتتستبدل بالموجود في الملف. تكمّل؟'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('لا')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('كمّل')),
+        ],
+      ),
+    );
+    if (yes != true) return;
+    try {
+      final result = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: ['xlsx']);
+      if (result.isEmpty) return;
+      final p = result.first.path;
+      if (p == null) return;
+      if (p != settingsPath) File(p).copySync(settingsPath);
+      final ok = await importRegistryFromExcel();
+      _snack(ok ? 'اتستورد ${registry.length} ماكينة.' : 'الملف مفيهوش ماكينات.');
+      if (mounted) setState(() {});
+    } catch (e) {
+      _dbg('import excel error: $e');
+      _snack('فشل الاستيراد.');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppSettings.of(context);
+    final cs = Theme.of(context).colorScheme;
+    final flagged = registry.where((m) => m.flag.isNotEmpty).length;
+    final reserved = registry.where((m) => m.reserved).length;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('إدارة الماكينات'),
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (v) {
+              if (v == 'export') _exportExcel();
+              if (v == 'import') _importExcel();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'export', child: Text('تصدير نسخة إكسيل (احتياطي)')),
+              PopupMenuItem(value: 'import', child: Text('استيراد من إكسيل')),
+            ],
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  _mini(Icons.pin, 'لصق Terminal IDs', () => _pasteColumn('tid')),
+                  _mini(Icons.badge_outlined, 'لصق Merchant IDs', () => _pasteColumn('merchant')),
+                  _mini(Icons.drive_file_rename_outline, 'لصق الأسامي', () => _pasteColumn('name')),
+                  _mini(Icons.add_location_alt_outlined, 'إضافة في مكان معين', _addAt, filled: true),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: w.Text(
+                      '${registry.length} ماكينة • ${rowNames.length} وحدة • $reserved محجوزة'
+                      '${flagged > 0 ? ' • $flagged للمراجعة' : ''}',
+                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (registryWarnings.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0x26FF9800),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.orange),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final t in registryWarnings.take(6)) Text('• $t', style: const TextStyle(fontSize: 12)),
+                    if (registryWarnings.length > 6)
+                      Text('... و${registryWarnings.length - 6} تنبيه تاني', style: const TextStyle(fontSize: 12)),
+                    Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: TextButton(
+                        onPressed: () => setState(registryWarnings.clear),
+                        child: const Text('تمام'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            Expanded(
+              child: registry.isEmpty
+                  ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text('القايمة فاضية. اعمل فحص أول أو الصق البيانات من فوق.',
+                            textAlign: TextAlign.center),
+                      ),
+                    )
+                  : ReorderableListView.builder(
+                      buildDefaultDragHandles: false,
+                      padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+                      itemCount: registry.length,
+                      onReorder: (o, n) {
+                        if (n > o) n--;
+                        final m = registry.removeAt(o);
+                        m.unplaced = false;
+                        registry.insert(n, m);
+                        _commit();
+                      },
+                      itemBuilder: (_, i) {
+                        final m = registry[i];
+                        final ft = _flagText(m.flag);
+                        return Card(
+                          key: ObjectKey(m),
+                          margin: const EdgeInsets.symmetric(vertical: 3),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(color: _unitColor(m.row), width: 1.5),
+                          ),
+                          child: ListTile(
+                            onTap: () => _edit(i),
+                            leading: CircleAvatar(
+                              backgroundColor: _unitColor(m.row),
+                              foregroundColor: Colors.white,
+                              child: w.Text('${i + 1}'),
+                            ),
+                            title: w.Text(
+                              m.reserved ? tr('محجوزة (لسه من غير Terminal ID)') : m.tid,
+                              textDirection: m.reserved ? null : TextDirection.ltr,
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: m.reserved ? cs.onSurfaceVariant : null),
+                            ),
+                            subtitle: w.Text(
+                              '${m.unit.isEmpty ? tr('من غير اسم') : m.unit}'
+                              '${m.merchant.isEmpty ? '' : '\nMerchant: ${m.merchant}'}'
+                              '${m.status == 'off' ? '\n${tr('🏖 إجازة')}' : ''}'
+                              '${ft.isEmpty ? '' : '\n${tr(ft)}'}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            isThreeLine: true,
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (m.flag.isNotEmpty)
+                                  IconButton(
+                                    tooltip: tr('تمام، سيب التنبيه'),
+                                    icon: const Icon(Icons.check_circle_outline, color: Colors.orange),
+                                    onPressed: () {
+                                      m.flag = '';
+                                      _commit();
+                                    },
+                                  ),
+                                IconButton(
+                                  tooltip: tr('مسح'),
+                                  icon: const Icon(Icons.delete_outline),
+                                  onPressed: () => _delete(i),
+                                ),
+                                ReorderableDragStartListener(
+                                  index: i,
+                                  child: const Padding(
+                                    padding: EdgeInsets.all(6),
+                                    child: Icon(Icons.drag_handle),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
