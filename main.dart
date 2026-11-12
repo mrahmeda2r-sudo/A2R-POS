@@ -2364,16 +2364,49 @@ int _rowForUnitName(String name) {
 }
 
 // الـ MERCHANT ID المكتوب على الإيصال (الأكتر تكراراً بين القراءات)
+// 1) الشكل المعتاد: كلمة MERCHANT ID (أو غلطات قراءتها زي 1D / MID) وبعدها الرقم، حتى لو في سطر تاني.
+//    ما بيعديش على كلمة TERMINAL / TID علشان ما ياخدش رقم الترمنل بالغلط.
+// 2) احتياطي: لو الكلمة موجودة والرقم بعيد عنها (الـ OCR لخبط ترتيب الأسطر): رقم واحد بس من 10 لـ 16 رقم في النص.
+//    لو فيه أكتر من رقم أو النص إيصال دفع (RRN / APPROVAL): مفيش تخمين، بيرجّع null ويتنبّه عليه.
 String? extractMerchantId(List<String> texts) {
   final found = <String>[];
-  final re = RegExp(r"MERCHANT\s*(?:ID|10|NO)\D{0,15}?(\d[\d\s/]{6,16}\d)", caseSensitive: false);
+  final re = RegExp(
+      r"(?:MERCH\w*\s*(?:ID|I0|1D|IO|10|NO|N0)|\bMID)\W{0,3}(?:(?!TERMINAL|TID|\d)[\s\S]){0,40}?(\d[\d\s/]{6,18}\d)",
+      caseSensitive: false);
   for (final t in texts) {
     for (final m in re.allMatches(t)) {
       final d = m.group(1)!.replaceAll('/', '7').replaceAll(RegExp(r'\D'), '');
       if (d.length >= 8 && d.length <= 16) found.add(d);
     }
   }
-  return mostCommon(found)?.key;
+  final best = mostCommon(found)?.key;
+  if (best != null) return best;
+  final hint = RegExp(r'MERCH|\bMID\b', caseSensitive: false);
+  final payish = RegExp(r'RRN|APPROVAL|AUTH', caseSensitive: false);
+  final lone = RegExp(r'(?<![\d*])(\d[\d ]{8,20}\d)(?![\d*])');
+  for (final t in texts) {
+    if (!hint.hasMatch(t) || payish.hasMatch(t)) continue;
+    final c = <String>{};
+    for (final m in lone.allMatches(t)) {
+      final d = m.group(1)!.replaceAll(RegExp(r'\D'), '');
+      if (d.length >= 10 && d.length <= 16) c.add(d);
+    }
+    if (c.length == 1) return c.first;
+  }
+  return null;
+}
+
+// السطور اللي فيها MERCHANT أو رقم طويل: بتتكتب في id_debug.txt لما الـ Merchant ID ما يتقراش
+String _merchSnippet(List<String> texts) {
+  final out = <String>[];
+  final re = RegExp(r'MERCH|\bMID\b|\d{10,}', caseSensitive: false);
+  for (final t in texts) {
+    for (final l in t.split('\n')) {
+      if (re.hasMatch(l)) out.add(l.trim());
+    }
+  }
+  final s = out.take(8).join(' | ');
+  return s.length > 400 ? s.substring(0, 400) : s;
 }
 
 // لو الـ MERCHANT ID ده متسجل قبل كده بنرجّع صف وحدته (تطابق كامل بس، من غير تقريب)
@@ -2390,9 +2423,11 @@ void learnMerchant(String tid, List<String> texts) {
   if (m == null) return;
   var ch = false;
   final mid = extractMerchantId(texts);
+  if (mid == null && m.merchant.isEmpty) _dbg('NO MERCHANT $tid: ${_merchSnippet(texts)}');
   if (mid != null) {
     if (m.merchant.isEmpty && !m.lockMerch) {
       m.merchant = mid;
+      if (m.flag == 'no-merchant') m.flag = '';
       ch = true;
     } else if (m.merchant.isNotEmpty && !merchantEq(m.merchant, mid)) {
       final msg = 'ماكينة ${registry.indexOf(m) + 1} ($tid): الـ Merchant ID المقروء $mid مختلف عن المسجل ${m.merchant}';
