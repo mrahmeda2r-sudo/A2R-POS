@@ -693,6 +693,9 @@ const List<String> kSeedNamesAr = ['تيل', 'أزرق', 'نيلي', 'أخضر',
 const List<String> kSeedNamesEn = ['Teal', 'Blue', 'Indigo', 'Green', 'Orange', 'Purple', 'A2R (brand)'];
 
 // ───────── حالة مشتركة بين التابين ─────────
+// بيتغير لما تقفل شاشة إدارة الماكينات بعد تعديل: التابين يحدّثوا أرقام الماكينات والملفات
+final ValueNotifier<int> registryRev = ValueNotifier<int>(0);
+bool registryDirty = false;
 final ValueNotifier<Map<int, int>> closingTxn = ValueNotifier<Map<int, int>>(<int, int>{}); // رقم الماكينة -> عدد معاملات الباتش
 final ValueNotifier<int> wipeSignal = ValueNotifier<int>(0); // بيتغير لما "مسح كل حاجة" يخلص
 bool homeBusyG = false;
@@ -4525,6 +4528,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     days = sharedDays.value;
     sharedDays.addListener(_syncDays);
     wipeSignal.addListener(_onWipe);
+    registryRev.addListener(_onRegistry);
     customDir = loadFolder();
     customOut = loadOutDir();
     if (customOut != null && customOut!.isNotEmpty) outputDir = customOut!;
@@ -4666,8 +4670,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     homeAutoG = false;
     sharedDays.removeListener(_syncDays);
     wipeSignal.removeListener(_onWipe);
+    registryRev.removeListener(_onRegistry);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  // اتعدّلت الماكينات من الشاشة: نحدّث أرقام الإيصالات ونعيد بناء الإكسيل والـ PDF بالترتيب الجديد
+  void _onRegistry() {
+    if (!mounted || busy || processedItems.isEmpty) return;
+    for (final r in processedItems) {
+      refreshItemFromRegistry(r);
+    }
+    rebuildFiles();
   }
 
   // ───── فحص تلقائي: بيراقب الصور الجديدة ويفحصها لوحده (بيستنى لحد ما الصور تخلص تنزيل) ─────
@@ -8217,6 +8231,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     sharedDays.addListener(_syncDays);
     wipeSignal.addListener(_onWipe);
     closingTxn.addListener(_onClosing);
+    registryRev.addListener(_onRegistry);
     results.addAll(loadMState());
     results.sort(_cmpM);
     final pend = results.where((r) => r.pending).length;
@@ -8236,6 +8251,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     sharedDays.removeListener(_syncDays);
     wipeSignal.removeListener(_onWipe);
     closingTxn.removeListener(_onClosing);
+    registryRev.removeListener(_onRegistry);
     WidgetsBinding.instance.removeObserver(this);
     for (final r in results) {
       r.ctl.dispose();
@@ -8265,6 +8281,25 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       namingDone = false;
       reviewOnly = false;
       status = 'تم مسح كل حاجة. اضغط "فحص وإعادة تسمية" لبدء يوم جديد.';
+    });
+  }
+
+  // اتعدّلت الماكينات من الشاشة: أرقام الملفات تتحدّث من الـ Terminal ID (الأسماء اللي اتنسخت قبل كده بتتحدث في الفحص الجاي)
+  void _onRegistry() {
+    if (!mounted || busy) return;
+    var stale = 0;
+    for (final r in results) {
+      final t = r.tidUsed;
+      final info = t == null ? null : terminals[t];
+      if (info == null) continue;
+      if (r.orderNum != info.orderNum) stale++;
+      r.orderNum = info.orderNum;
+    }
+    saveMState(results);
+    setState(() {
+      if (stale > 0) {
+        status = '$status\n⚠️ $stale ملف أرقام ماكينته اتغيرت: اضغط "فحص" علشان الأسماء تتحدث.';
+      }
     });
   }
 
@@ -9976,6 +10011,24 @@ bool exportSettingsToExcel() {
     f.parent.createSync(recursive: true);
     final excel = ex.Excel.createExcel();
     final order = terminals.entries.toList()..sort((a, b) => a.value.orderNum.compareTo(b.value.orderNum));
+    // الورقة الأساسية: كل سطور السجل بترتيبها (بما فيها المحجوز والإجازة)
+    excel.appendRow('Machines', <ex.CellValue?>[
+      ex.TextCellValue('Order'),
+      ex.TextCellValue('TID'),
+      ex.TextCellValue('Unit_Name'),
+      ex.TextCellValue('Merchant_ID'),
+      ex.TextCellValue('Status'),
+    ]);
+    for (var i = 0; i < registry.length; i++) {
+      final m = registry[i];
+      excel.appendRow('Machines', <ex.CellValue?>[
+        ex.IntCellValue(i + 1),
+        ex.TextCellValue(m.tid),
+        ex.TextCellValue(m.unit),
+        ex.TextCellValue(m.merchant),
+        ex.TextCellValue(m.status),
+      ]);
+    }
     excel.appendRow('Terminals', <ex.CellValue?>[
       ex.TextCellValue('Order'),
       ex.TextCellValue('TID'),
@@ -10128,11 +10181,50 @@ Future<void> openMachinesManager(BuildContext context) async {
     );
     return;
   }
+  registryDirty = false;
   await Navigator.push(context, MaterialPageRoute(builder: (_) => const MachinesManagePage()));
+  if (registryDirty) {
+    registryDirty = false;
+    registryRev.value++;
+  }
 }
 
 // استيراد احتياطي من ملف A2R_Settings.xlsx: بيستبدل السجل كله
 Future<bool> importRegistryFromExcel() async {
+  try {
+    final sheets = _readXlsxSheets(File(settingsPath).readAsBytesSync());
+    final ms = sheets['Machines'];
+    if (ms != null && ms.length >= 2) {
+      final rows = <MachineRow>[];
+      final used = <String>{};
+      String c(List<String> r, int i) => i < r.length ? r[i].trim() : '';
+      for (final r in ms.skip(1)) {
+        final t = _cleanTid(c(r, 1));
+        final tid = (t != null && used.add(t)) ? t : '';
+        final unit = c(r, 2);
+        final mer = c(r, 3).replaceAll(RegExp(r'\D'), '');
+        if (tid.isEmpty && unit.isEmpty && mer.isEmpty) continue;
+        rows.add(MachineRow(
+          tid: tid,
+          unit: unit,
+          merchant: mer,
+          status: c(r, 4) == 'off' ? 'off' : 'active',
+          lockName: unit.isNotEmpty,
+          lockMerch: mer.isNotEmpty,
+        ));
+      }
+      if (rows.isNotEmpty) {
+        registry
+          ..clear()
+          ..addAll(rows);
+        rebuildFromRegistry();
+        saveRegistry();
+        return true;
+      }
+    }
+  } catch (e) {
+    _dbg('import Machines sheet error: $e');
+  }
   await loadSettingsFromExcel(force: true);
   if (terminals.isEmpty) {
     rebuildFromRegistry(); // القارئ القديم مسح الفهارس: نرجّعها من السجل
@@ -10233,6 +10325,7 @@ class MachinesManagePage extends StatefulWidget {
 
 class _MachinesManagePageState extends State<MachinesManagePage> {
   void _commit() {
+    registryDirty = true;
     rebuildFromRegistry();
     saveRegistry();
     if (mounted) setState(() {});
