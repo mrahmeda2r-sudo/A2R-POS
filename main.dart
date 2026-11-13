@@ -512,6 +512,8 @@ Widget _moreMenu(BuildContext context, {required bool busy, required VoidCallbac
         onLog();
       } else if (v == 'settings') {
         openSettingsFile(context);
+      } else if (v == 'autolog') {
+        showAutoLog(context);
       } else if (v == 'wipe') {
         wipeEverything(context);
       }
@@ -524,6 +526,7 @@ Widget _moreMenu(BuildContext context, {required bool busy, required VoidCallbac
       PopupMenuItem(
           value: 'resetApps', child: w.Text(ar ? 'إعادة اختيار تطبيقات الفتح' : 'Reset default apps')),
       PopupMenuItem(value: 'log', child: w.Text(ar ? 'مشاركة اللوج' : 'Share log')),
+      PopupMenuItem(value: 'autolog', child: w.Text(ar ? 'سجل الفحص التلقائي' : 'Auto-scan log')),
       PopupMenuItem(value: 'settings', child: w.Text(ar ? 'إدارة الماكينات' : 'Manage machines')),
       const PopupMenuDivider(),
       PopupMenuItem(
@@ -634,16 +637,49 @@ class RootPage extends StatefulWidget {
 class _RootPageState extends State<RootPage> {
   int tab = 0;
 
+  AppLifecycleListener? _lcl;
+
   @override
   void initState() {
     super.initState();
     chainStep.addListener(_onChain);
+    openReqG.addListener(_onOpenReq);
+    _chan.setMethodCallHandler(_onNative);
+    _lcl = AppLifecycleListener(onResume: _pullOpen);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _pullOpen());
   }
 
   @override
   void dispose() {
     chainStep.removeListener(_onChain);
+    openReqG.removeListener(_onOpenReq);
+    _lcl?.dispose();
     super.dispose();
+  }
+
+  Future<dynamic> _onNative(MethodCall call) async {
+    if (call.method == 'onOpen') {
+      final p = call.arguments;
+      if (p is String && p.isNotEmpty) requestOpenG(p);
+      try {
+        await _chan.invokeMethod('getInitialOpen'); // نمسح الطلب من ناحية أندرويد
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  Future<void> _pullOpen() async {
+    try {
+      final p = await _chan.invokeMethod<String>('getInitialOpen');
+      if (p != null && p.isNotEmpty) requestOpenG(p);
+    } catch (_) {}
+  }
+
+  void _onOpenReq() {
+    final v = openReqG.value;
+    if (v == null || !mounted) return;
+    final t = v.startsWith('mach|') ? 1 : 0;
+    if (t != tab) setState(() => tab = t);
   }
 
   // أثناء الفحص الشامل: نفتح التاب اللي شغال دلوقتي
@@ -779,6 +815,54 @@ final ValueNotifier<Map<int, int>> closingTxn = ValueNotifier<Map<int, int>>(<in
 final ValueNotifier<int> wipeSignal = ValueNotifier<int>(0); // بيتغير لما "مسح كل حاجة" يخلص
 bool homeBusyG = false;
 bool machBusyG = false;
+bool quickBusyG = false; // الفحص التلقائي الخفيف شغال دلوقتي (الفحص اليدوي بيستنى لحد ما يخلص)
+
+Future<void> waitQuickIdle() async {
+  while (quickBusyG) {
+    await Future.delayed(const Duration(milliseconds: 400));
+  }
+}
+
+// قفل خدمة الخلفية بس لو مفيش فحص تلقائي شغال في أي تاب
+Future<void> stopKeepAliveSafe() async {
+  if (homeAutoG || machAutoG) return;
+  try {
+    await _chan.invokeMethod('stopKeepAlive');
+  } catch (_) {}
+}
+
+// ───────── الفحص التلقائي الخفيف: الملفات اللي اتفحصت (seen) + نتايج النهارده (لكشف التكرار) ─────────
+const int _kQuickSeenMax = 800; // آخر 800 مفتاح بس
+const int _kQuickBulk = 25; // أكتر من كده في دورة واحدة = مش وصول جديد (فترة/فولدر اتغيّر): ما نفحصهمش تلقائي
+
+String quickKeyOf(File f) {
+  var len = 0;
+  try {
+    len = f.lengthSync();
+  } catch (_) {}
+  return '${baseName(f.path)}:$len';
+}
+
+bool quickHasBaseline() => _readCfg()['quickSeen'] is List;
+
+Set<String> loadQuickSeen() {
+  final v = _readCfg()['quickSeen'];
+  return v is List ? v.map((e) => e.toString()).toSet() : <String>{};
+}
+
+void quickMarkSeen(Iterable<String> keys) {
+  final cfg = _readCfg();
+  final cur = cfg['quickSeen'] is List
+      ? (cfg['quickSeen'] as List).map((e) => e.toString()).toList()
+      : <String>[];
+  final have = cur.toSet();
+  for (final k in keys) {
+    if (have.add(k)) cur.add(k);
+  }
+  cfg['quickSeen'] = cur.length > _kQuickSeenMax ? cur.sublist(cur.length - _kQuickSeenMax) : cur;
+  _writeCfg(cfg);
+}
+
 
 // ───────── الفحص الشامل: الباتشات (التقفيل) ثم الملفات (إيصالات الدفع) ورا بعض ─────────
 bool chainRunning = false;
@@ -5221,6 +5305,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _autoTimer;
   String _doneSig = '';
   String _pendSig = '';
+  bool _fullRunning = false;
+  Set<String> _quickPend = <String>{};
 
   @override
   void initState() {
@@ -5230,7 +5316,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     homeAutoG = autoScan;
     homeRunG = () => runFullPipeline();
     homeSumG = _countLine;
-    if (autoScan) _startAuto();
+    openReqG.addListener(_onOpenReqHome);
     days = sharedDays.value;
     sharedDays.addListener(_syncDays);
     wipeSignal.addListener(_onWipe);
@@ -5238,6 +5324,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     customDir = loadFolder();
     customOut = loadOutDir();
     if (customOut != null && customOut!.isNotEmpty) outputDir = customOut!;
+    if (autoScan) _startAuto();
     // أول ما التطبيق يفتح: اطلب إذن الملفات وانزّل شيت الإعدادات وشيت النتيجة تلقائي
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
@@ -5372,6 +5459,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     _autoTimer?.cancel();
+    openReqG.removeListener(_onOpenReqHome);
     homeRunG = null;
     homeSumG = null;
     homeAutoG = false;
@@ -5425,20 +5513,102 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  void _onOpenReqHome() {
+    final key = openKeyOf(openReqG.value, 'home|');
+    if (key != null) _openByKeyHome(key, 0);
+  }
+
+  // بيفتح شاشة تعديل الإيصال اللي جه عنه الإشعار (لو الفحص لسه شغال بيستنى يخلص)
+  Future<void> _openByKeyHome(String key, int tries) async {
+    if (!mounted) return;
+    ReceiptItem? it;
+    for (final e in processedItems) {
+      if (e.key == key) {
+        it = e;
+        break;
+      }
+    }
+    if (it == null || busy) {
+      if (tries < 15) {
+        await Future.delayed(const Duration(milliseconds: 600));
+        return _openByKeyHome(key, tries + 1);
+      }
+      return;
+    }
+    await editReceipt(it);
+  }
+
+  // ───── فحص تلقائي خفيف: بيفحص الملف الجديد بس وبيبعتلك إشعار بالنتيجة (من غير ما تفتح التطبيق) ─────
+  // صور الفترة المحددة اللي لسه ما اتفحصتش (مفتاح كل ملف "الاسم:الحجم")، مرتبة بوقت التعديل
+  Map<String, File> _quickCandidates() {
+    final dirs = customDir != null ? [Directory(customDir!)] : findWhatsAppImageDirs();
+    final now = DateTime.now();
+    final cutoff = days < 0
+        ? DateTime(2000)
+        : DateTime(now.year, now.month, now.day).subtract(Duration(days: days));
+    final have = loadQuickSeen();
+    final found = <File>[];
+    final keyOf = <String, String>{};
+    for (final d in dirs) {
+      try {
+        for (final e in d.listSync().whereType<File>()) {
+          final lower = e.path.toLowerCase();
+          if (!(lower.endsWith('.jpg') ||
+              lower.endsWith('.jpeg') ||
+              lower.endsWith('.png') ||
+              lower.endsWith('.webp'))) {
+            continue;
+          }
+          final b = baseName(e.path);
+          if (b.startsWith('.') || b.startsWith('dup_')) continue;
+          if (fileDate(e).isBefore(cutoff)) continue;
+          final k = quickKeyOf(e);
+          if (k.endsWith(':0') || have.contains(k)) continue;
+          keyOf[e.path] = k;
+          found.add(e);
+        }
+      } catch (_) {}
+    }
+    found.sort((x, y) {
+      try {
+        return x.lastModifiedSync().compareTo(y.lastModifiedSync());
+      } catch (_) {
+        return 0;
+      }
+    });
+    final out = <String, File>{};
+    for (final f in found) {
+      out[keyOf[f.path]!] = f;
+    }
+    return out;
+  }
+
+  // أول تشغيل: الملفات الموجودة دلوقتي تعتبر اتفحصت (baseline)، والإشعارات للجديد بس
+  void _quickEnsureBaseline() {
+    if (quickHasBaseline()) return;
+    final keys = <String>[];
+    try {
+      keys.addAll(_quickCandidates().keys);
+    } catch (_) {}
+    quickMarkSeen(keys);
+  }
+
   Future<void> _watchService(bool on) async {
     try {
       if (on) {
         await _chan.invokeMethod('startKeepAlive',
             {'title': 'A2R POS', 'text': 'مراقبة الإيصالات الجديدة...'});
       } else {
-        await _chan.invokeMethod('stopKeepAlive');
+        await stopKeepAliveSafe();
       }
     } catch (_) {}
   }
 
   void _startAuto() {
     _autoTimer?.cancel();
-    _autoTimer = Timer.periodic(const Duration(seconds: 15), (_) => _autoTick());
+    _quickPend = <String>{};
+    _quickEnsureBaseline();
+    _autoTimer = Timer.periodic(const Duration(seconds: 2), (_) => _autoTick());
     _watchService(true);
   }
 
@@ -5448,19 +5618,176 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _watchService(false);
   }
 
+  DateTime? _lastTickAt; // آخر مرة المراقبة اشتغلت (لتشخيص: هل كانت شغالة وانت برا التطبيق؟)
+  String _lastDirSig = '';
+  int _idleTicks = 0;
+
+  // توقيع خفيف للمجلدات (وقت تعديل المجلد نفسه): لو ما اتغيرش مفيش داعي نلف على آلاف الملفات
+  String _dirSig() {
+    try {
+      final dirs = customDir != null ? [Directory(customDir!)] : findWhatsAppImageDirs();
+      return dirs.map((d) => '${d.path}:${d.statSync().modified.millisecondsSinceEpoch}').join('|');
+    } catch (_) {
+      return '';
+    }
+  }
+
   Future<void> _autoTick() async {
-    if (!mounted || !autoScan || busy || chainRunning || machBusyG) return;
-    final sig = _scanSig();
-    if (sig.isEmpty || sig == _doneSig) {
-      _pendSig = '';
+    _lastTickAt = DateTime.now();
+    if (!mounted || !autoScan || busy || _fullRunning || chainRunning || machBusyG || quickBusyG) return;
+    final ds = _dirSig();
+    if (ds.isNotEmpty && ds == _lastDirSig && _quickPend.isEmpty && ++_idleTicks < 15) return; // فحص كامل كل 30 ثانية على الأقل
+    _idleTicks = 0;
+    _lastDirSig = ds;
+    if (!quickHasBaseline()) {
+      _quickEnsureBaseline();
       return;
     }
-    if (sig != _pendSig) {
-      _pendSig = sig; // لسه الصور بتنزل: نستنى الدورة الجاية
+    final Map<String, File> cur;
+    try {
+      cur = _quickCandidates();
+    } catch (_) {
       return;
     }
-    _pendSig = '';
-    await runFullPipeline(auto: true);
+    // الملف جاهز لما مفتاحه (الاسم:الحجم) يتكرر في دورتين ورا بعض = التنزيل خلص
+    final ready = cur.entries.where((e) => _quickPend.contains(e.key)).toList();
+    _quickPend = cur.keys.toSet();
+    if (ready.isEmpty) return;
+    if (ready.length > _kQuickBulk) {
+      quickMarkSeen(ready.map((e) => e.key));
+      _quickPend.removeAll(ready.map((e) => e.key));
+      await _quickNotify(['⚠️ ظهر ${ready.length} ملف مرة واحدة (غالباً الفترة أو الفولدر اتغيّر) - ما فحصتهمش تلقائي، افحصهم بإيدك']);
+      return;
+    }
+    await _liteScan(ready);
+  }
+
+  // الفحص الخفيف = نفس فحص التقفيل بالظبط (نفس القراءة والتكرار والترقيم والتسمية والمراجعة)
+  // من غير بناء الإكسيل والـ PDF. الصور القديمة بتتاخد من الكاش فمبتتقراش تاني، فالمستهلك بس الصور الجديدة.
+  Future<void> _liteScan(List<MapEntry<String, File>> ready) async {
+    if (quickBusyG) return;
+    quickBusyG = true;
+    final lines = <String>[];
+    String? openKey;
+    var openBad = false;
+    try {
+      final keys = ready.map((e) => e.key).toSet();
+      await runFullPipeline(auto: true, lite: true);
+      quickMarkSeen(keys);
+      if (!mounted) return;
+      for (final en in ready) {
+        final name = baseName(en.value.path);
+        if (warnings.any((x) => x.startsWith('$name: فشلت القراءة'))) {
+          lines.add('⚠️ فشل الفحص التلقائي ($name) - افحصه بإيدك');
+        }
+      }
+      for (final it in processedItems) {
+        if (!keys.contains(it.key)) continue;
+        final l = _liteLine(it);
+        if (l != null) {
+          lines.add(l);
+          final isBad = l.startsWith('⚠️');
+          if (openKey == null || (isBad && !openBad)) {
+            openKey = it.key;
+            openBad = isBad;
+          }
+        }
+      }
+      // صور السيستم الجديدة (A2R Operations Console): مش باتش فمش في processedItems، فبنعمل لها سطر إشعار لوحدها
+      final newNames = ready.map((e) => baseName(e.value.path)).toSet();
+      for (final sy in sysReads) {
+        if (!newNames.contains(sy.file)) continue;
+        final t = sy.tid != null ? terminals[tidAlias[sy.tid!] ?? sy.tid!] : null;
+        final label = t != null ? 'ماكينة ${t.orderNum} - ${t.unitName}' : (sy.tid != null ? 'ترمنل ${sy.tid}' : sy.file);
+        if (sy.amount == null) {
+          lines.add('⚠️ صورة سيستم ($label): مش قادر أقرا المبلغ - راجعها');
+          continue;
+        }
+        var tot = 0.0;
+        var has = false;
+        if (t != null) {
+          for (final x in processedItems) {
+            if (x.counts && x.amount > 0 && x.orderNum == t.orderNum) {
+              tot += x.amount;
+              has = true;
+            }
+          }
+        }
+        final amt = sy.amount!.toStringAsFixed(2);
+        if (!has) {
+          lines.add('🖥️ صورة سيستم $label: $amt ج.م (لسه مفيش باتش للمقارنة)');
+        } else {
+          final d = round2(tot - sy.amount!);
+          lines.add(d == 0
+              ? '✅ صورة سيستم $label: $amt ج.م - مطابق للباتشات'
+              : '⚠️ صورة سيستم $label: $amt ج.م - فرق ${d.toStringAsFixed(2)} عن مجموع الباتشات');
+        }
+      }
+    } catch (e) {
+      _dbg('LITE_FAIL $e');
+    } finally {
+      quickBusyG = false;
+    }
+    if (lines.isNotEmpty) await _quickNotify(lines, openKey: openKey);
+  }
+
+  // سطر النتيجة لكل إيصال جديد (من نتيجة فحص التقفيل نفسها)
+  String? _liteLine(ReceiptItem it) {
+    if (it.userExcluded) return null;
+    final name = baseName(it.path);
+    if (it.ignoredDoc) return '⚠️ $name: شكله إيصال دفع/مستند مش باتش - راجعه';
+    final label = it.orderNum != null
+        ? 'ماكينة ${it.orderNum}${it.suffix != null ? ' (باتش ${it.suffix})' : ''}${it.unitName != null ? ' - ${it.unitName}' : ''}'
+        : (it.unitName ?? name);
+    final why = <String>[];
+    if (it.reprintSummary) why.add('REPRINT/SUMMARY (إعادة طباعة/ملخص)');
+    if (it.missingBatchClosed && !it.reprintSummary) why.add('مش مكتوب BATCH CLOSED');
+    if (it.row == null) {
+      why.add('الماكينة/الوحدة مش معروفة');
+    } else if (it.weakId) {
+      why.add('الماكينة اتحددت تلقائي - اتأكد منها');
+    }
+    if (it.how == 'extra-batch') why.add('الماكينة ظهرت قبل كده بمبلغ مختلف - اتحسبت باتش إضافي');
+    if (it.amount <= 0) {
+      why.add('مش قادر أقرا المبلغ');
+    } else if (it.alt != null) {
+      why.add('قراءتين مختلفتين للمبلغ (${it.amount.toStringAsFixed(2)} و ${it.alt!.toStringAsFixed(2)})');
+    } else if (!it.ok) {
+      why.add('المبلغ غير مؤكد');
+    }
+    if (it.dupSuspect) why.add('مشكوك إنه مكرر (نفس الماكينة ونفس المبلغ)');
+    if (it.dateOdd) why.add('تاريخه ${it.date} والأغلب ${it.dateMain}');
+    if (it.unusual != null) why.add(it.unusual!);
+    final amt = it.amount > 0 ? ' (${it.amount.toStringAsFixed(2)} ج.م)' : '';
+    if (why.isEmpty) return '✅ $label تمام$amt';
+    return '⚠️ $label$amt: ${why.join('، ')}';
+  }
+
+  // لو التطبيق على الشاشة: SnackBar. غير كده: إشعار. ودايماً آخر نتيجة في مربع الحالة.
+  Future<void> _quickNotify(List<String> lines, {String? openKey}) async {
+    final text = lines.join('\n');
+    final bad = lines.any((l) => l.startsWith('⚠️'));
+    final now = DateTime.now();
+    final hm = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    if (mounted && !busy) {
+      setState(() => status = 'آخر فحص تلقائي ($hm):\n$text');
+    }
+    // داخل التطبيق: SnackBar لو التطبيق ظاهر، وإشعار التليفون دايماً (ظاهر أو لأ)
+    if (mounted && _life == AppLifecycleState.resumed) {
+      try {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: w.Text(tr(text)),
+          duration: Duration(seconds: bad ? 8 : 4),
+        ));
+      } catch (_) {}
+    }
+    await postAutoNotify(
+      tab: 'home',
+      title: '${bad ? '⚠️' : '✅'} A2R POS - فحص تلقائي${lines.length > 1 ? ' (${lines.length} ملفات)' : ''}',
+      text: text,
+      bad: bad,
+      openKey: openKey,
+    );
   }
 
   Future<void> _setAuto(bool v) async {
@@ -5470,9 +5797,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     cfg['autoScan'] = v;
     _writeCfg(cfg);
     if (v) {
-      _doneSig = '';
+      await ensureNotifPerm(context);
+      try {
+        final st = await Permission.manageExternalStorage.status;
+        if (!st.isGranted) await Permission.manageExternalStorage.request();
+      } catch (_) {}
+      await askBatteryExempt(force: true);
+      if (!mounted || !autoScan) return;
       _startAuto();
-      await askBatteryExempt();
+      if (!busy) {
+        setState(() => status = 'الفحص التلقائي شغال: أي إيصال جديد هيتفحص لوحده وهيجيلك إشعار بالنتيجة.');
+      }
     } else {
       _stopAuto();
     }
@@ -5949,8 +6284,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         text: item.orderNum != null ? 'ماكينة ${item.orderNum}' : baseName(item.path));
   }
 
-  Future<void> rebuildFiles() async {
-    setState(() => status = 'جاري توليد الملفات وتحديث الشيتات...');
+  Future<void> rebuildFiles({bool lite = false}) async {
+    setState(() => status = lite ? 'جاري تحديث النتائج (فحص خفيف)...' : 'جاري توليد الملفات وتحديث الشيتات...');
     for (final r in processedItems) {
       refreshItemFromRegistry(r); // الإجماليات بتتجمّع بالوحدة: لازم رقم الوحدة يبقى من السجل الحالي
     }
@@ -5979,6 +6314,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (r.counts && r.date != null && r.date != reportDate) {
         otherByDate.putIfAbsent(r.date!, () => <ReceiptItem>[]).add(r);
       }
+    }
+    // الفحص الخفيف: نفس الحسابات (الناقص + التقرير + غير المعتاد) من غير بناء الـ PDF ولا الإكسيل
+    if (lite) {
+      final ignoreL = <int>{};
+      try {
+        for (final m in RegExp(r'\d+').allMatches(File('$baseDir/ignore.txt').readAsStringSync())) {
+          ignoreL.add(int.parse(m.group(0)!));
+        }
+      } catch (_) {}
+      final foundL = mainItems.where((e) => e.amount > 0).map((e) => e.orderNum).whereType<int>().toSet();
+      missingTerminals = [
+        for (final i in expectedMachineNums())
+          if (!foundL.contains(i) && !ignoreL.contains(i)) i
+      ];
+      writeReport(reportDate);
+      setState(() => status = 'تم فحص خفيف: ${_countLine()}\n'
+          '• من غير بناء الإكسيل والـ PDF (اضغط "فحص التقفيل" لبنائهم).' +
+          (sourceNote.isEmpty ? '' : '\n$sourceNote'));
+      return;
     }
     var pageNo = 0;
     Future<bool> buildPdf(List<ReceiptItem> items, File out) async {
@@ -6238,25 +6592,32 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  Future<void> runFullPipeline({List<String>? manualPaths, bool auto = false}) async {
+  // lite = الفحص الخفيف: نفس خطوات فحص التقفيل بالظبط (قراءة + تكرار + ترقيم + تسمية + مراجعة)
+  // لكن من غير بناء الإكسيل والـ PDF، ومن غير طلب أذونات ولا إبقاء الشاشة شغالة
+  Future<void> runFullPipeline({List<String>? manualPaths, bool auto = false, bool lite = false}) async {
+    _fullRunning = true;
     if (manualPaths == null) _doneSig = _scanSig();
-    if (!auto && !chainRunning) {
+    if (!lite) await waitQuickIdle(); // لو الفحص الخفيف شغال نستناه يخلص
+    if (!lite && !auto && !chainRunning) {
       try {
         await Permission.notification.request();
       } catch (_) {}
       await askBatteryExempt();
     }
-    try {
-      await _chan.invokeMethod('startKeepAlive',
-          {'title': 'A2R POS', 'text': 'جاري فحص الإيصالات...'});
-    } catch (_) {}
-    try {
-      await _chan.invokeMethod('keepScreenOn', {'on': true});
-    } catch (_) {}
+    if (!lite) {
+      try {
+        await _chan.invokeMethod('startKeepAlive',
+            {'title': 'A2R POS', 'text': 'جاري فحص الإيصالات...'});
+      } catch (_) {}
+      try {
+        await _chan.invokeMethod('keepScreenOn', {'on': true});
+      } catch (_) {}
+    }
     final sw = Stopwatch()..start();
     try {
-      await _runPipelineInner(manualPaths: manualPaths);
+      await _runPipelineInner(manualPaths: manualPaths, lite: lite);
     } finally {
+      _fullRunning = false;
       sw.stop();
       if (mounted && sw.elapsed.inSeconds >= 1 && _isFinalScanStatus(status)) {
         setState(() => status = '$status\n⏱ الوقت المستغرق: ${fmtElapsed(sw.elapsed)}');
@@ -6264,16 +6625,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (autoScan) {
         await _watchService(true); // نفضل شغالين نراقب الإيصالات الجديدة
       } else if (!chainRunning) {
-        try {
-          await _chan.invokeMethod('stopKeepAlive');
-        } catch (_) {}
+        await stopKeepAliveSafe(); // ما نقفلش الخدمة لو تاب تاني فيه فحص تلقائي
       }
-      if (!chainRunning) {
+      if (!lite && !chainRunning) {
         try {
           await _chan.invokeMethod('keepScreenOn', {'on': false});
         } catch (_) {}
       }
-      if (_life != AppLifecycleState.resumed && !chainRunning) {
+      if (!lite && _life != AppLifecycleState.resumed && !chainRunning) {
         final rv = processedItems.where((e) => e.needsReview).length;
         final txt = 'تم فحص ${processedItems.length} إيصال'
             '${missingTerminals.isNotEmpty ? ' - ناقص ${missingTerminals.length} ماكينة' : ''}'
@@ -6285,10 +6644,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
     }
   }
-
-  Future<void> _runPipelineInner({List<String>? manualPaths}) async {
-    final perm = await Permission.manageExternalStorage.request();
-    if (!perm.isGranted) {
+  Future<void> _runPipelineInner({List<String>? manualPaths, bool lite = false}) async {
+    final granted = lite
+        ? await Permission.manageExternalStorage.isGranted
+        : (await Permission.manageExternalStorage.request()).isGranted;
+    if (!granted) {
       setState(() => status = 'يجب منح إذن الوصول إلى جميع الملفات للمتابعة.');
       return;
     }
@@ -6400,6 +6760,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       });
       return;
     }
+
+    // الفحص التلقائي الخفيف: الملفات دي هتتفحص هنا، فنعتبرها اتفحصت علشان ما يجيش عنها إشعار تاني
+    try {
+      quickMarkSeen(todo.where((f) => dirs.any((d) => f.parent.path == d.path)).map(quickKeyOf));
+    } catch (_) {}
 
     final recognizer = TextRecognizer(script: TextRecognitionScript.latin);
     Directory(rawImagesDir).createSync(recursive: true);
@@ -6868,7 +7233,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     dropProvisional();
     processedItems.addAll(kept);
     processedItems.addAll(ignoredItems);
-    await rebuildFiles();
+    await rebuildFiles(lite: lite);
     try {
       Directory(tmpDir).deleteSync(recursive: true);
     } catch (_) {}
@@ -9022,6 +9387,217 @@ class _MachinesReportPageState extends State<MachinesReportPage> {
       ),
     );
   }
+}
+
+// ───────── سجل الفحص التلقائي + فتح الإيصال من الإشعار ─────────
+final ValueNotifier<String?> openReqG = ValueNotifier<String?>(null);
+String _lastOpenP = '';
+DateTime _lastOpenAt = DateTime(2000);
+
+// طلب فتح إيصال معين (من الإشعار أو من السجل): "home|مفتاح" أو "mach|مفتاح"
+void requestOpenG(String payload) {
+  final now = DateTime.now();
+  if (payload == _lastOpenP && now.difference(_lastOpenAt).inSeconds < 3) return; // منع التكرار
+  _lastOpenP = payload;
+  _lastOpenAt = now;
+  openReqG.value = '$payload#${now.microsecondsSinceEpoch}';
+}
+
+String? openKeyOf(String? v, String prefix) {
+  if (v == null || !v.startsWith(prefix)) return null;
+  final h = v.lastIndexOf('#');
+  return v.substring(prefix.length, h > prefix.length ? h : v.length);
+}
+
+class AutoLogEntry {
+  final DateTime t;
+  final String tab; // home | mach
+  final String title;
+  final String text;
+  final bool bad;
+  final String? payload;
+  AutoLogEntry(this.t, this.tab, this.title, this.text, this.bad, this.payload);
+  Map<String, dynamic> toJson() =>
+      {'t': t.millisecondsSinceEpoch, 'tab': tab, 'title': title, 'text': text, 'bad': bad, 'p': payload};
+  static AutoLogEntry fromJson(Map<String, dynamic> j) => AutoLogEntry(
+      DateTime.fromMillisecondsSinceEpoch((j['t'] as num).toInt()),
+      (j['tab'] ?? 'home') as String,
+      (j['title'] ?? '') as String,
+      (j['text'] ?? '') as String,
+      j['bad'] == true,
+      j['p'] as String?);
+}
+
+final List<AutoLogEntry> autoLogG = <AutoLogEntry>[];
+bool _autoLogLoaded = false;
+String get _autoLogPath => '$baseDir/auto_log.json';
+
+void loadAutoLog() {
+  if (_autoLogLoaded) return;
+  _autoLogLoaded = true;
+  try {
+    final f = File(_autoLogPath);
+    if (!f.existsSync()) return;
+    final l = jsonDecode(f.readAsStringSync());
+    if (l is List) {
+      for (final e in l) {
+        if (e is Map) autoLogG.add(AutoLogEntry.fromJson(Map<String, dynamic>.from(e)));
+      }
+    }
+  } catch (_) {}
+}
+
+void _saveAutoLog() {
+  try {
+    Directory(baseDir).createSync(recursive: true);
+    File(_autoLogPath).writeAsStringSync(jsonEncode(autoLogG.map((e) => e.toJson()).toList()));
+  } catch (_) {}
+}
+
+// بيسجّل الإشعار في السجل وبيبعته لشريط التليفون (بصوت واهتزاز لو فيه مشكلة، وهادي لو تمام)
+Future<void> postAutoNotify(
+    {required String tab, required String title, required String text, required bool bad, String? openKey}) async {
+  loadAutoLog();
+  final payload = openKey == null ? null : '$tab|$openKey';
+  autoLogG.insert(0, AutoLogEntry(DateTime.now(), tab, title, text, bad, payload));
+  while (autoLogG.length > 300) {
+    autoLogG.removeLast();
+  }
+  _saveAutoLog();
+  try {
+    await _chan.invokeMethod('notify', {
+      'title': tr(title),
+      'text': tr(text),
+      'alert': bad,
+      if (payload != null) 'open': payload,
+    });
+  } catch (_) {}
+}
+
+void showAutoLog(BuildContext context) {
+  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AutoLogPage()));
+}
+
+class AutoLogPage extends StatefulWidget {
+  const AutoLogPage({super.key});
+
+  @override
+  State<AutoLogPage> createState() => _AutoLogPageState();
+}
+
+class _AutoLogPageState extends State<AutoLogPage> {
+  bool onlyBad = false;
+
+  @override
+  void initState() {
+    super.initState();
+    loadAutoLog();
+  }
+
+  static String _hm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    bool today(DateTime a) => a.year == now.year && a.month == now.month && a.day == now.day;
+    final list = autoLogG.where((e) => !onlyBad || e.bad).toList();
+    final todayAll = autoLogG.where((e) => today(e.t)).toList();
+    final todayBad = todayAll.where((e) => e.bad).length;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('سجل الفحص التلقائي'),
+        actions: [
+          IconButton(
+            tooltip: tr('مسح السجل'),
+            icon: const Icon(Icons.delete_outline),
+            onPressed: autoLogG.isEmpty
+                ? null
+                : () async {
+                    final ok = await showDialog<bool>(
+                      context: context,
+                      builder: (c) => AlertDialog(
+                        title: const Text('مسح السجل؟'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('لأ')),
+                          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('مسح')),
+                        ],
+                      ),
+                    );
+                    if (ok == true) {
+                      autoLogG.clear();
+                      _saveAutoLog();
+                      if (mounted) setState(() {});
+                    }
+                  },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+            child: Row(
+              children: [
+                Expanded(child: w.Text(tr('النهارده: ${todayAll.length} إشعار • $todayBad فيهم مشاكل'))),
+                FilterChip(
+                  label: const Text('مشاكل بس'),
+                  selected: onlyBad,
+                  onSelected: (v) => setState(() => onlyBad = v),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: list.isEmpty
+                ? const Center(child: Text('مفيش إشعارات لسه.'))
+                : ListView.separated(
+                    itemCount: list.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (c, i) {
+                      final e = list[i];
+                      final d = today(e.t) ? '' : '${e.t.day}/${e.t.month}  ';
+                      return ListTile(
+                        leading: Icon(e.bad ? Icons.warning_amber : Icons.check_circle,
+                            color: e.bad ? Colors.orange : Colors.green),
+                        title: w.Text(tr(e.title), maxLines: 2, overflow: TextOverflow.ellipsis),
+                        subtitle: w.Text('$d${_hm(e.t)} • ${tr(e.tab == 'mach' ? 'إيصالات الدفع' : 'التقفيل')}\n${tr(e.text)}'),
+                        isThreeLine: true,
+                        trailing: e.payload != null ? const Icon(Icons.chevron_left) : null,
+                        onTap: e.payload == null
+                            ? null
+                            : () {
+                                Navigator.of(context).pop();
+                                requestOpenG(e.payload!);
+                              },
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// لو إذن الإشعارات مقفول: مفيش إشعار هيظهر وانت برا التطبيق. بنقولك وبنفتحلك الإعدادات
+Future<void> ensureNotifPerm(BuildContext context) async {
+  try {
+    var st = await Permission.notification.status;
+    if (!st.isGranted) st = await Permission.notification.request();
+    if (st.isGranted) return;
+  } catch (_) {
+    return;
+  }
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    content: w.Text(tr('الإشعارات مقفولة للتطبيق، فمش هيجيلك إشعار النتيجة وانت برا التطبيق. فعّلها من الإعدادات.')),
+    duration: const Duration(seconds: 12),
+    action: SnackBarAction(
+        label: tr('الإعدادات'),
+        onPressed: () {
+          openAppSettings();
+        }),
+  ));
 }
 
 class ClosingReportPage extends StatefulWidget {
