@@ -1154,6 +1154,152 @@ ReceiptItem _receiptFromCache(Map<String, dynamic> c, String key, String path) {
   return item;
 }
 
+// ───────── مقارنة الباتش بالسيستم (للماكينة): الفرق في العدد وفي المبلغ ─────────
+int? _numOfItem(ReceiptItem it) =>
+    it.tid != null ? (terminals[tidAlias[it.tid!] ?? it.tid!]?.orderNum ?? it.orderNum) : it.orderNum;
+
+class SysDiff {
+  final int num;
+  final double? batchAmt, sysAmt, amtDiff; // amtDiff = مجموع الباتشات - السيستم
+  final int? batchCnt, sysCnt, cntDiff; // cntDiff = عدد الباتش - عدد السيستم
+  const SysDiff(this.num, this.batchAmt, this.sysAmt, this.amtDiff, this.batchCnt, this.sysCnt, this.cntDiff);
+  bool get match => (amtDiff == null || amtDiff == 0) && (cntDiff == null || cntDiff == 0);
+}
+
+Map<int, SysDiff> sysDiffMap(List<ReceiptItem> items) {
+  final sum = <int, double>{};
+  final unknown = <int>{};
+  for (final it in items) {
+    if (!it.counts) continue;
+    final n = _numOfItem(it);
+    if (n == null) continue;
+    if (it.amount <= 0) {
+      unknown.add(n);
+      continue;
+    }
+    sum[n] = (sum[n] ?? 0) + it.amount;
+  }
+  final out = <int, SysDiff>{};
+  final nums = <int>{...sysAmtByNum.keys, ...sysTxnByNum.keys};
+  for (final n in nums) {
+    final sa = sysAmtByNum[n];
+    final sc = sysTxnByNum[n];
+    final ba = (unknown.contains(n) || !sum.containsKey(n)) ? null : round2(sum[n]!);
+    final bc = batchTxnByNum[n];
+    final ad = (ba != null && sa != null) ? round2(ba - sa) : null;
+    final cd = (bc != null && sc != null) ? bc - sc : null;
+    if (ad == null && cd == null) continue;
+    out[n] = SysDiff(n, ba, sa, ad, bc, sc, cd);
+  }
+  return out;
+}
+
+String _sysDiffText(SysDiff d) {
+  final parts = <String>[];
+  if (d.amtDiff != null && d.amtDiff != 0) {
+    parts.add('المبلغ: الباتشات ${d.amtDiff! > 0 ? 'أكتر' : 'أقل'} بـ ${d.amtDiff!.abs().toStringAsFixed(2)} ج.م');
+  }
+  if (d.cntDiff != null && d.cntDiff != 0) {
+    parts.add('العدد: الباتشات ${d.cntDiff! > 0 ? 'أكتر' : 'أقل'} بـ ${d.cntDiff!.abs()}');
+  }
+  return parts.join(' • ');
+}
+
+// شارة على كارت الباتش: مطابق للسيستم أو فيه فرق
+Widget _sysDiffBadge(BuildContext c, SysDiff? d) {
+  if (d == null) return const SizedBox.shrink();
+  final m = d.match ? Colors.green : Colors.amber;
+  return Padding(
+    padding: const EdgeInsets.only(top: 4),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: _tintBg(c, m),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _tintBorder(c, m)),
+      ),
+      child: w.Text(
+        d.match ? tr('🖥️ مطابق للسيستم ✓') : '${tr('🖥️ فرق السيستم')}: ${tr(_sysDiffText(d))}',
+        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: _tintFg(c, m)),
+      ),
+    ),
+  );
+}
+
+// كارت ملف إيصالات الدفع: جدول صغير (العدد والإجمالي) للباتش والسيستم والملف
+Widget _cmpPanel(BuildContext c, MResult r) {
+  final n = r.orderNum;
+  if (n == null || r.excluded || r.pending) return const SizedBox.shrink();
+  final bc = batchTxnByNum[n], ba = batchAmtByNum[n];
+  final sc = sysTxnByNum[n], sa = sysAmtByNum[n];
+  if (bc == null && ba == null && sc == null && sa == null) return const SizedBox.shrink();
+  final fileAmt = r.amtRead > 0 ? r.amtSum : null;
+  final cs = Theme.of(c).colorScheme;
+  String money(double? v) => v == null ? '—' : v.toStringAsFixed(2);
+  String cnt(int? v) => v == null ? '—' : '$v';
+  TableRow row(String label, int? n1, double? a1, {bool bold = false}) {
+    final st = TextStyle(fontSize: 12, fontWeight: bold ? FontWeight.bold : FontWeight.normal);
+    return TableRow(children: [
+      Padding(padding: const EdgeInsets.symmetric(vertical: 1, horizontal: 4), child: w.Text(label, style: st)),
+      Padding(padding: const EdgeInsets.symmetric(vertical: 1, horizontal: 4), child: w.Text(cnt(n1), style: st)),
+      Padding(padding: const EdgeInsets.symmetric(vertical: 1, horizontal: 4), child: w.Text(money(a1), style: st)),
+    ]);
+  }
+
+  final hs = TextStyle(fontSize: 11, color: cs.onSurfaceVariant);
+  final head = TableRow(children: [
+    const SizedBox.shrink(),
+    Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: w.Text(_l(c, 'العدد', 'Count'), style: hs)),
+    Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: w.Text(_l(c, 'الإجمالي', 'Total'), style: hs)),
+  ]);
+  final foot = <String>[];
+  var bad = false;
+  if (bc != null && sc != null) {
+    final d = bc - sc;
+    foot.add(d == 0 ? _l(c, 'العدد مطابق ✓', 'Count matches ✓') : _l(c, 'فرق العدد ${d.abs()}', 'Count diff ${d.abs()}'));
+    if (d != 0) bad = true;
+  }
+  if (ba != null && sa != null) {
+    final d = round2(ba - sa);
+    foot.add(d == 0
+        ? _l(c, 'الإجمالي مطابق ✓', 'Total matches ✓')
+        : _l(c, 'فرق الإجمالي ${d.abs().toStringAsFixed(2)}', 'Total diff ${d.abs().toStringAsFixed(2)}'));
+    if (d != 0) bad = true;
+  }
+  final m = bad ? Colors.red : Colors.green;
+  return Padding(
+    padding: const EdgeInsets.only(top: 6),
+    child: Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: _tintBg(c, Colors.blueGrey, soft: true),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _tintBorder(c, Colors.blueGrey)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Table(
+            defaultColumnWidth: const IntrinsicColumnWidth(),
+            children: [
+              head,
+              row(_l(c, 'الباتش', 'Batch'), bc, ba),
+              row(_l(c, 'السيستم', 'System'), sc, sa),
+              row(_l(c, 'الملف', 'File'), r.count, fileAmt, bold: true),
+            ],
+          ),
+          if (foot.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 3, left: 4, right: 4),
+              child: w.Text('${_l(c, 'الباتش ↔ السيستم', 'Batch ↔ System')}: ${foot.join(' • ')}',
+                  style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: _tintFg(c, m))),
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
 void _publishClosing(List<ReceiptItem> items, [List<SysTotal> sys = const <SysTotal>[]]) {
   int? numOf(ReceiptItem it) =>
       it.tid != null ? (terminals[tidAlias[it.tid!] ?? it.tid!]?.orderNum ?? it.orderNum) : it.orderNum;
@@ -1206,6 +1352,18 @@ void _publishClosing(List<ReceiptItem> items, [List<SysTotal> sys = const <SysTo
     }
   }
   sysTxnByNum = sysMap;
+  final sysAmt = <int, double>{};
+  final latestAmt = <String, SysTotal>{};
+  for (final sy in sys) {
+    if (sy.tid == null || sy.amount == null) continue;
+    final pv = latestAmt[sy.tid!];
+    if (pv == null || sy.printed.compareTo(pv.printed) > 0) latestAmt[sy.tid!] = sy;
+  }
+  for (final e in latestAmt.entries) {
+    final n = terminals[tidAlias[e.key] ?? e.key]?.orderNum;
+    if (n != null) sysAmt[n] = e.value.amount!;
+  }
+  sysAmtByNum = sysAmt;
   final cur = closingTxn.value;
   var same = cur.length == sums.length;
   if (same) {
@@ -1371,6 +1529,7 @@ Future<void> wipeEverything(BuildContext context) async {
   sysTxnByNum = <int, int>{};
   batchTxnByNum = <int, int>{};
   batchAmtByNum = <int, double>{};
+  sysAmtByNum = <int, double>{};
   wipeSignal.value++;
   final mb = (bytes / 1048576).toStringAsFixed(1);
   m.showSnackBar(SnackBar(
@@ -5299,6 +5458,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool autoRotate = false; // أبطأ: بيجرّب تدوير كل صورة مش إيصال
   String sourceNote = '';
   bool reviewOnly = false;
+  int alertsOpen = 0; // شريط التنبيهات: 0 مقفول، 1 ناقص، 2 ملاحظات، 3 فرق السيستم
   bool stopReq = false;
   bool autoScan = false;
   bool settingsOpen = false;
@@ -7276,6 +7436,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _alertChip(BuildContext c, int id, String label, MaterialColor m) {
+    final sel = alertsOpen == id;
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: () => setState(() => alertsOpen = sel ? 0 : id),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: _tintBg(c, m, strong: sel),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _tintBorder(c, m), width: sel ? 2 : 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, color: _tintFg(c, m))),
+            Icon(sel ? Icons.expand_less : Icons.expand_more, size: 16, color: _tintFg(c, m)),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildScaffold(BuildContext context) {
     AppSettings.of(context);
     final xlsx = latestOutput('.xlsx');
@@ -7283,6 +7466,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final reviewCount = processedItems.where((e) => e.needsReview).length;
     _syncBadge(homeBadge, reviewCount);
     _publishClosing(processedItems, sysReads);
+    final sysDiffs = sysDiffMap(processedItems);
     homeBusyG = busy;
     return Scaffold(
       appBar: AppBar(
@@ -7387,7 +7571,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 busy: busy,
                 onRestOk: _markRestOk),
           ],
-          if (missingTerminals.isNotEmpty) ...[
+          if (missingTerminals.isNotEmpty || warnings.isNotEmpty || sysDiffs.values.any((d) => !d.match))
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  if (missingTerminals.isNotEmpty)
+                    _alertChip(context, 1, '⚠️ ناقص ${missingTerminals.length}', Colors.amber),
+                  if (warnings.isNotEmpty) _alertChip(context, 2, '📝 ملاحظات ${warnings.length}', Colors.orange),
+                  if (sysDiffs.values.any((d) => !d.match))
+                    _alertChip(context, 3, '🖥️ فرق السيستم ${sysDiffs.values.where((d) => !d.match).length}', Colors.red),
+                ],
+              ),
+            ),
+          if (alertsOpen == 1 && missingTerminals.isNotEmpty) ...[
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(10),
@@ -7417,7 +7616,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
             ),
           ],
-          if (warnings.isNotEmpty) ...[
+          if (alertsOpen == 2 && warnings.isNotEmpty) ...[
             const SizedBox(height: 10),
             Container(
               constraints: const BoxConstraints(maxHeight: 130),
@@ -7429,6 +7628,31 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
               child: SingleChildScrollView(
                 child: Text(warningsText(), style: const TextStyle(fontSize: 12)),
+              ),
+            ),
+          ],
+          if (alertsOpen == 3 && sysDiffs.values.any((d) => !d.match)) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _tintBg(context, Colors.red, soft: true),
+                border: Border.all(color: _tintBorder(context, Colors.red)),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('🖥️ فرق بين الباتشات وصورة السيستم:',
+                      style: TextStyle(fontWeight: FontWeight.bold, color: _tintFg(context, Colors.red))),
+                  const SizedBox(height: 4),
+                  for (final d in (sysDiffs.values.where((d) => !d.match).toList()..sort((a, b) => a.num.compareTo(b.num))))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text('ماكينة ${d.num} - ${terminals[numToTid[d.num]]?.unitName ?? ''}: ${_sysDiffText(d)}',
+                          style: const TextStyle(fontSize: 13)),
+                    ),
+                ],
               ),
             ),
           ],
@@ -7460,7 +7684,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       : 'ماكينة ${item.orderNum ?? '؟'} - ${item.unitName ?? 'وحدة غير معروفة'}',
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
-                subtitle: Text(subtitleOf(item)),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(subtitleOf(item)),
+                    if (item.counts && !item.userExcluded) _sysDiffBadge(context, sysDiffs[_numOfItem(item)]),
+                  ],
+                ),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -8505,6 +8735,7 @@ void saveMOut(String? f) {
 Map<int, int> sysTxnByNum = <int, int>{};
 Map<int, int> batchTxnByNum = <int, int>{}; // رقم الماكينة -> عدد الباتش فقط (من غير السيستم)
 Map<int, double> batchAmtByNum = <int, double>{}; // رقم الماكينة -> إجمالي مبلغ الباتش (من إيصال الإقفال، لو مؤكد)
+Map<int, double> sysAmtByNum = <int, double>{}; // رقم الماكينة -> إجمالي مبلغ السيستم (أحدث صورة A2R Operations Console)
 
 // لو عدد الـ PDF = عدد السيستم (إلكترونية): ملاحظة التسلسل (RRN) متتحسبش مراجعة. ده القرار الوحيد اللي السيستم بيحسمه
 bool _sysCntMatch(MResult r) {
@@ -11712,10 +11943,16 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
                         style: TextStyle(
                             fontWeight: FontWeight.bold,
                             decoration: r.excluded ? TextDecoration.lineThrough : null)),
-                    subtitle: w.Text(
-                        '${r.verdict > 0 ? _l(context, '✓ اتراجع: صح\n', '✓ Reviewed: OK\n') : ''}'
-                        '${r.pending && busy ? _l(context, 'بيتعدّ...', 'Counting...') : _mSummary(context, r)}'
-                        '${r.notes.isEmpty ? '' : '\n${_l(context, '⚠️ ${r.notes.length} ملاحظة - اضغط لفتح التقرير', '⚠️ ${r.notes.length} note(s) - tap to open the report')}'}'),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        w.Text(
+                            '${r.verdict > 0 ? _l(context, '✓ اتراجع: صح\n', '✓ Reviewed: OK\n') : ''}'
+                            '${r.pending && busy ? _l(context, 'بيتعدّ...', 'Counting...') : _mSummary(context, r)}'
+                            '${r.notes.isEmpty ? '' : '\n${_l(context, '⚠️ ${r.notes.length} ملاحظة - اضغط لفتح التقرير', '⚠️ ${r.notes.length} note(s) - tap to open the report')}'}'),
+                        _cmpPanel(context, r),
+                      ],
+                    ),
                     trailing: SizedBox(
                       width: 118,
                       child: Row(
