@@ -9911,6 +9911,97 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     await _startCountAll(auto: true);
   }
 
+  // ───── الفحص الخفيف: سطر نتيجة لكل ملف جديد + إشعار بيفتح تقرير الملف ─────
+  String? _machLine(MResult r) {
+    if (r.excluded) return null;
+    final name = r.newName ?? r.pdfName;
+    if (r.count < 0) return '⚠️ فشل عد الملف ($name) - افحصه بإيدك';
+    final label = r.orderNum != null ? 'ماكينة ${r.orderNum}' : name;
+    if (r.count == 0) return '⚠️ $label: مفيش إيصالات اتقرت في الملف';
+    final why = <String>[];
+    if (r.orderNum == null) {
+      why.add('الماكينة مش معروفة');
+    } else if (!r.idOk) {
+      why.add('الماكينة مش مؤكدة');
+    }
+    if (!r.cntOk) why.add('العدد مش مؤكد');
+    if (r.seqBad && !_sysCntMatch(r)) why.add('العدد مش مطابق لتسلسل الإيصالات');
+    final d = _batchDiff(r);
+    if (r.verdict == 0 && d != null && d != 0) {
+      why.add(d > 0 ? 'ناقص $d عن الباتش' : 'زيادة ${-d} عن الباتش');
+    }
+    final amt = r.amtRead > 0 ? ' • ${r.amtSum.toStringAsFixed(2)} ج.م' : '';
+    if (why.isEmpty) return '✅ $label: ${r.count} إيصال$amt';
+    return '⚠️ $label: ${r.count} إيصال$amt - ${why.join('، ')}';
+  }
+
+  Future<void> _autoNotifyMach(Map<String, int> before) async {
+    final lines = <String>[];
+    String? openKey;
+    var openBad = false;
+    for (final r in results) {
+      final old = before[r.key];
+      final isNew = old == null || (old < 0 && r.count >= 0);
+      if (!isNew) continue;
+      final l = _machLine(r);
+      if (l == null) continue;
+      lines.add(l);
+      final isBad = l.startsWith('⚠️');
+      if (openKey == null || (isBad && !openBad)) {
+        openKey = r.key;
+        openBad = isBad;
+      }
+    }
+    if (lines.isEmpty) return;
+    final text = lines.join('\n');
+    final bad = lines.any((l) => l.startsWith('⚠️'));
+    final now = DateTime.now();
+    final hm = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    if (mounted && !busy) {
+      setState(() => status = 'آخر فحص تلقائي ($hm):\n$text');
+    }
+    if (mounted && _life == AppLifecycleState.resumed) {
+      try {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: w.Text(tr(text)),
+          duration: Duration(seconds: bad ? 8 : 4),
+        ));
+      } catch (_) {}
+    }
+    await postAutoNotify(
+      tab: 'mach',
+      title: '${bad ? '⚠️' : '✅'} A2R POS - إيصالات الدفع${lines.length > 1 ? ' (${lines.length} ملفات)' : ''}',
+      text: text,
+      bad: bad,
+      openKey: openKey,
+    );
+  }
+
+  void _onOpenReqMach() {
+    final key = openKeyOf(openReqG.value, 'mach|');
+    if (key != null) _openByKeyMach(key, 0);
+  }
+
+  // بيفتح تقرير الملف اللي جه عنه الإشعار (لو الفحص لسه شغال بيستنى يخلص)
+  Future<void> _openByKeyMach(String key, int tries) async {
+    if (!mounted) return;
+    MResult? r;
+    for (final e in results) {
+      if (e.key == key) {
+        r = e;
+        break;
+      }
+    }
+    if (r == null || busy) {
+      if (tries < 15) {
+        await Future.delayed(const Duration(milliseconds: 600));
+        return _openByKeyMach(key, tries + 1);
+      }
+      return;
+    }
+    await openReport(r);
+  }
+
   Future<void> _setAuto(bool v) async {
     machAutoG = v;
     setState(() => autoScan = v);
@@ -9920,6 +10011,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     if (v) {
       _doneSig = '';
       _startAuto();
+      if (mounted) await ensureNotifPerm(context);
       await askBatteryExempt();
     } else {
       _stopAuto();
@@ -9951,7 +10043,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
         }
       }
     }
-    await start(count: true);
+    await start(count: true, auto: auto);
   }
 
   // ملخص العد (نفس رسالة "اكتمل العد")
@@ -9977,6 +10069,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     wipeSignal.addListener(_onWipe);
     closingTxn.addListener(_onClosing);
     registryRev.addListener(_onRegistry);
+    openReqG.addListener(_onOpenReqMach);
     results.addAll(loadMState());
     results.sort(_cmpM);
     final pend = results.where((r) => r.pending).length;
@@ -9997,6 +10090,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
     wipeSignal.removeListener(_onWipe);
     closingTxn.removeListener(_onClosing);
     registryRev.removeListener(_onRegistry);
+    openReqG.removeListener(_onOpenReqMach);
     WidgetsBinding.instance.removeObserver(this);
     for (final r in results) {
       r.ctl.dispose();
@@ -10349,7 +10443,7 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
   }
 
   // ───── التشغيل ─────
-  Future<void> start({bool resumeOnly = false, bool count = false, List<String>? manualPaths}) async {
+  Future<void> start({bool resumeOnly = false, bool count = false, bool auto = false, List<String>? manualPaths}) async {
     if (busy) return;
     final perm = await Permission.manageExternalStorage.request();
     if (!perm.isGranted) {
@@ -10367,6 +10461,8 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
       await _chan.invokeMethod('keepScreenOn', {'on': true});
     } catch (_) {}
     final sw = Stopwatch()..start();
+    // الفحص التلقائي الخفيف: نفتكر حالة كل ملف قبل الفحص علشان نبلّغ عن الجديد بس
+    final before = <String, int>{for (final r in results) r.key: r.count};
     try {
       await _run(resumeOnly, count, manualPaths: manualPaths);
     } finally {
@@ -10386,7 +10482,14 @@ class _MachinesPageState extends State<MachinesPage> with WidgetsBindingObserver
           await _chan.invokeMethod('keepScreenOn', {'on': false});
         } catch (_) {}
       }
-      if (_life != AppLifecycleState.resumed && !chainRunning) {
+      if (auto && !chainRunning) {
+        try {
+          await _autoNotifyMach(before);
+        } catch (e) {
+          _dbg('MACH_LITE_FAIL $e');
+        }
+      }
+      if (!auto && _life != AppLifecycleState.resumed && !chainRunning) {
         final total = results.fold<int>(0, (a, r) => a + (r.count > 0 && !r.excluded ? r.count : 0));
         try {
           await _chan.invokeMethod('notify', {
