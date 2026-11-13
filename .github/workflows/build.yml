@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  APP_VERSION: "1.3.1"
+  APP_VERSION: "1.3.2"
 
 jobs:
   build:
@@ -98,6 +98,7 @@ jobs:
           import android.content.Context
           import android.content.Intent
           import android.os.Build
+          import android.os.Bundle
           import android.net.Uri
           import android.provider.DocumentsContract
           import androidx.core.content.FileProvider
@@ -107,10 +108,30 @@ jobs:
           import java.io.File
 
           class MainActivity : FlutterActivity() {
+              private var initialOpen: String? = null
+              private var chan: MethodChannel? = null
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  initialOpen = intent?.getStringExtra("open")
+              }
+
+              override fun onNewIntent(intent: Intent) {
+                  super.onNewIntent(intent)
+                  setIntent(intent)
+                  val o = intent.getStringExtra("open")
+                  if (o != null && o.isNotEmpty()) {
+                      initialOpen = o
+                      try { chan?.invokeMethod("onOpen", o) } catch (e: Exception) {}
+                  }
+              }
+
               override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
                   android.os.StrictMode.setVmPolicy(android.os.StrictMode.VmPolicy.Builder().build())
-                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "pos/native")
+                  val posChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "pos/native")
+                  chan = posChannel
+                  posChannel
                       .setMethodCallHandler { call, result ->
                           when (call.method) {
                               "openFolder" -> result.success(openFolder(call.argument<String>("path") ?: ""))
@@ -130,11 +151,20 @@ jobs:
                               "notify" -> {
                                   try {
                                       val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                                      nm.notify(call.argument<Int>("id") ?: ((System.currentTimeMillis() % 1000000).toInt() + 100), NotifHelper.build(this, "pos_done", "اكتمال المعالجة", call.argument<String>("title") ?: "A2R POS", call.argument<String>("text") ?: "", false))
+                                      val hasAlertArg = call.hasArgument("alert")
+                                      val isAlert = call.argument<Boolean>("alert") ?: false
+                                      val chId = if (!hasAlertArg) "pos_done" else (if (isAlert) "pos_alert" else "pos_ok")
+                                      val chName = if (!hasAlertArg) "اكتمال المعالجة" else (if (isAlert) "تنبيه: إيصال محتاج مراجعة" else "نتيجة الفحص التلقائي")
+                                      nm.notify(call.argument<Int>("id") ?: ((System.currentTimeMillis() % 1000000).toInt() + 100), NotifHelper.build(this, chId, chName, call.argument<String>("title") ?: "A2R POS", call.argument<String>("text") ?: "", false, isAlert, call.argument<String>("open")))
                                       result.success(true)
                                   } catch (e: Exception) { result.success(false) }
                               }
-                              "folderHandlers" -> result.success(folderHandlers(call.argument<String>("path") ?: ""))
+                              "getInitialOpen" -> {
+                              val o = initialOpen
+                              initialOpen = null
+                              result.success(o)
+                          }
+                          "folderHandlers" -> result.success(folderHandlers(call.argument<String>("path") ?: ""))
                               "openFolderWith" -> result.success(openFolderWith(call.argument<String>("path") ?: "", call.argument<String>("pkg") ?: "", call.argument<String>("cls") ?: "", call.argument<String>("kind") ?: ""))
                               "openFile" -> result.success(openFile(call.argument<String>("path") ?: "", call.argument<String>("mime") ?: "*/*"))
                               "shareToWhatsApp" -> result.success(shareToWhatsApp(call.argument<List<String>>("paths") ?: emptyList(), call.argument<String>("text") ?: ""))
@@ -462,21 +492,44 @@ jobs:
           import android.os.IBinder
 
           object NotifHelper {
-              fun build(ctx: Context, channelId: String, channelName: String, title: String, text: String, ongoing: Boolean): Notification {
+              fun build(ctx: Context, channelId: String, channelName: String, title: String, text: String, ongoing: Boolean, alert: Boolean = false, open: String? = null): Notification {
                   val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                   if (Build.VERSION.SDK_INT >= 26) {
-                      val imp = if (ongoing) NotificationManager.IMPORTANCE_LOW else NotificationManager.IMPORTANCE_HIGH
-                      nm.createNotificationChannel(NotificationChannel(channelId, channelName, imp))
+                      val imp = if (ongoing || channelId == "pos_ok") NotificationManager.IMPORTANCE_LOW else NotificationManager.IMPORTANCE_HIGH
+                      val ch = NotificationChannel(channelId, channelName, imp)
+                      if (channelId == "pos_alert") {
+                          val attrs = android.media.AudioAttributes.Builder()
+                              .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                              .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                              .build()
+                          ch.setSound(android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION), attrs)
+                          ch.enableVibration(true)
+                          ch.vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 800)
+                          ch.enableLights(true)
+                      } else if (channelId == "pos_ok") {
+                          ch.setSound(null, null)
+                          ch.enableVibration(false)
+                      }
+                      nm.createNotificationChannel(ch)
                   }
-                  val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName) ?: Intent()
-                  val pi = PendingIntent.getActivity(ctx, 0, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                  val launch = Intent(ctx, MainActivity::class.java)
+                  launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                  val hasOpen = open != null && open.isNotEmpty()
+                  if (hasOpen) launch.putExtra("open", open)
+                  val rc = if (hasOpen) (open.hashCode() and 0x7fffffff) else 0
+                  val pi = PendingIntent.getActivity(ctx, rc, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                   val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(ctx, channelId) else Notification.Builder(ctx)
                   b.setSmallIcon(ctx.applicationInfo.icon)
                   b.setContentTitle(title)
                   b.setContentText(text)
+                  b.setStyle(Notification.BigTextStyle().bigText(text))
                   b.setContentIntent(pi)
                   b.setOngoing(ongoing)
                   b.setAutoCancel(!ongoing)
+                  if (Build.VERSION.SDK_INT < 26 && alert) {
+                      b.setPriority(Notification.PRIORITY_HIGH)
+                      b.setDefaults(Notification.DEFAULT_ALL)
+                  }
                   return b.build()
               }
           }
