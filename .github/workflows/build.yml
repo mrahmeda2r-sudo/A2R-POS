@@ -72,7 +72,7 @@ jobs:
           cp main.dart app/lib/main.dart
           cd app
           flutter pub add google_mlkit_text_recognition permission_handler pdf "archive:^3.6.1" share_plus image printing shared_preferences file_picker excel
-          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>\n    <queries><intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="vnd.android.document/directory"/></intent><intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="resource/folder"/></intent></queries>\n    <application|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>\n    <queries><intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="vnd.android.document/directory"/></intent><intent><action android:name="android.intent.action.VIEW"/><data android:mimeType="resource/folder"/></intent></queries>\n    <application|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<application|<application android:largeHeap=\"true\"|' android/app/src/main/AndroidManifest.xml
           sed -i -E 's/^( *)compileSdk *=.*/\1compileSdk = 37/' android/app/build.gradle.kts
           printf '%s\n' '-dontwarn com.google.mlkit.vision.text.**' '-keep class com.google.mlkit.** { *; }' '-keep class com.google.android.gms.internal.mlkit_vision_text_common.** { *; }' '-keep class com.google.android.gms.internal.mlkit_vision_text_bundled_common.** { *; }' > android/app/proguard-rules.pro
@@ -87,7 +87,7 @@ jobs:
               <external-path name="all_ext" path="." />
           </paths>
           EOX
-          sed -i 's|</application>|    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.pos_fileprovider" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/pos_file_paths"/></provider>\n    <service android:name=".KeepAliveService" android:exported="false" android:foregroundServiceType="dataSync"/>\n    </application>|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|</application>|    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.pos_fileprovider" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/pos_file_paths"/></provider>\n    <service android:name=".KeepAliveService" android:exported="false" android:foregroundServiceType="dataSync\|specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="receipt_monitoring"/></service>\n    </application>|' android/app/src/main/AndroidManifest.xml
           sed -i 's|android:label="[^"]*"|android:label="A2R POS Public"|' android/app/src/main/AndroidManifest.xml
           MA=$(find android/app/src/main -name MainActivity.kt | head -1)
           PKG=$(grep -m1 '^package ' "$MA" | sed 's/package //')
@@ -130,7 +130,7 @@ jobs:
                               "notify" -> {
                                   try {
                                       val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                                      nm.notify(8, NotifHelper.build(this, "pos_done", "اكتمال المعالجة", call.argument<String>("title") ?: "A2R POS", call.argument<String>("text") ?: "", false))
+                                      nm.notify(call.argument<Int>("id") ?: ((System.currentTimeMillis() % 1000000).toInt() + 100), NotifHelper.build(this, "pos_done", "اكتمال المعالجة", call.argument<String>("title") ?: "A2R POS", call.argument<String>("text") ?: "", false))
                                       result.success(true)
                                   } catch (e: Exception) { result.success(false) }
                               }
@@ -482,12 +482,33 @@ jobs:
           }
 
           class KeepAliveService : Service() {
+              private var wl: android.os.PowerManager.WakeLock? = null
               override fun onBind(intent: Intent?): IBinder? = null
+              override fun onDestroy() {
+                  try { if (wl?.isHeld == true) wl?.release() } catch (e: Exception) {}
+                  wl = null
+                  super.onDestroy()
+              }
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
                   val title = intent?.getStringExtra("title") ?: "A2R POS"
                   val text = intent?.getStringExtra("text") ?: ""
                   val n = NotifHelper.build(this, "pos_progress", "جاري المعالجة", title, text, true)
-                  if (Build.VERSION.SDK_INT >= 29) startForeground(7, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) else startForeground(7, n)
+                  if (Build.VERSION.SDK_INT >= 34) {
+                      try { startForeground(7, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) }
+                      catch (e: Exception) { startForeground(7, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) }
+                  } else if (Build.VERSION.SDK_INT >= 29) {
+                      startForeground(7, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                  } else {
+                      startForeground(7, n)
+                  }
+                  try {
+                      if (wl == null) {
+                          val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                          wl = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "pos:keepalive")
+                          wl?.setReferenceCounted(false)
+                      }
+                      if (wl?.isHeld != true) wl?.acquire()
+                  } catch (e: Exception) {}
                   return START_NOT_STICKY
               }
           }
